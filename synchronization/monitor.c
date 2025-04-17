@@ -45,51 +45,85 @@ void monitor_init(void) {
 }
 
 /**
- * @brief Insert an item into the buffer
+ * @brief Insert an item into the buffer with timeout
  * 
  * @param item The item to insert
+ * @param timeout_ms Timeout in milliseconds, 0 for no timeout
+ * @return int 0 on success, -1 on timeout or error
  */
-void monitor_insert(int item) {
-    pthread_mutex_lock(&monitor.mutex);
-    
-    // Wait while buffer is full
-    while (monitor.count == BUFFER_SIZE) {
-        pthread_cond_wait(&monitor.not_full, &monitor.mutex);
+int monitor_insert(int item, unsigned int timeout_ms) {
+    struct timespec ts;
+    int ret = 0;
+
+    if (pthread_mutex_lock(&monitor.mutex) != 0) {
+        return -1;
     }
     
-    // Insert item
-    monitor.buffer[monitor.in] = item;
-    monitor.in = (monitor.in + 1) % BUFFER_SIZE;
-    monitor.count++;
+    // Wait while buffer is full
+    while (monitor.count == BUFFER_SIZE && ret == 0) {
+        if (timeout_ms > 0) {
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += timeout_ms / 1000;
+            ts.tv_nsec += (timeout_ms % 1000) * 1000000;
+            ret = pthread_cond_timedwait(&monitor.not_full, &monitor.mutex, &ts);
+        } else {
+            ret = pthread_cond_wait(&monitor.not_full, &monitor.mutex);
+        }
+    }
     
-    // Signal that buffer is not empty
-    pthread_cond_signal(&monitor.not_empty);
+    if (ret == 0) {
+        // Insert item
+        monitor.buffer[monitor.in] = item;
+        monitor.in = (monitor.in + 1) % BUFFER_SIZE;
+        monitor.count++;
+        
+        // Signal that buffer is not empty
+        pthread_cond_signal(&monitor.not_empty);
+    }
+    
     pthread_mutex_unlock(&monitor.mutex);
+    return (ret == 0) ? 0 : -1;
 }
 
 /**
- * @brief Remove an item from the buffer
+ * @brief Remove an item from the buffer with timeout
  * 
- * @return int The removed item
+ * @param item Pointer to store the removed item
+ * @param timeout_ms Timeout in milliseconds, 0 for no timeout
+ * @return int 0 on success, -1 on timeout or error
  */
-int monitor_remove(void) {
-    pthread_mutex_lock(&monitor.mutex);
-    
-    // Wait while buffer is empty
-    while (monitor.count == 0) {
-        pthread_cond_wait(&monitor.not_empty, &monitor.mutex);
+int monitor_remove(int* item, unsigned int timeout_ms) {
+    struct timespec ts;
+    int ret = 0;
+
+    if (pthread_mutex_lock(&monitor.mutex) != 0 || item == NULL) {
+        return -1;
     }
     
-    // Remove item
-    int item = monitor.buffer[monitor.out];
-    monitor.out = (monitor.out + 1) % BUFFER_SIZE;
-    monitor.count--;
+    // Wait while buffer is empty
+    while (monitor.count == 0 && ret == 0) {
+        if (timeout_ms > 0) {
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += timeout_ms / 1000;
+            ts.tv_nsec += (timeout_ms % 1000) * 1000000;
+            ret = pthread_cond_timedwait(&monitor.not_empty, &monitor.mutex, &ts);
+        } else {
+            ret = pthread_cond_wait(&monitor.not_empty, &monitor.mutex);
+        }
+    }
     
-    // Signal that buffer is not full
-    pthread_cond_signal(&monitor.not_full);
+    if (ret == 0) {
+        // Remove item
+        *item = monitor.buffer[monitor.out];
+        monitor.out = (monitor.out + 1) % BUFFER_SIZE;
+        monitor.count--;
+        
+        // Signal that buffer is not full
+        pthread_cond_signal(&monitor.not_full);
+    }
+    
     pthread_mutex_unlock(&monitor.mutex);
-    
-    return item;
+    return (ret == 0) ? 0 : -1;
 }
 
 /**
@@ -101,9 +135,12 @@ void* producer(void* arg) {
         // Generate a random item
         item = rand() % 100;
         
-        // Insert item into buffer
-        monitor_insert(item);
-        printf("Producer inserted: %d\n", item);
+        // Insert item into buffer with 1 second timeout
+        if (monitor_insert(item, 1000) == 0) {
+            printf("Producer inserted: %d\n", item);
+        } else {
+            printf("Producer timeout or error\n");
+        }
         
         // Simulate some work
         usleep(100000);
@@ -117,9 +154,12 @@ void* producer(void* arg) {
 void* consumer(void* arg) {
     int item;
     while (true) {
-        // Remove item from buffer
-        item = monitor_remove();
-        printf("Consumer removed: %d\n", item);
+        // Remove item from buffer with 1.5 second timeout
+        if (monitor_remove(&item, 1500) == 0) {
+            printf("Consumer removed: %d\n", item);
+        } else {
+            printf("Consumer timeout or error\n");
+        }
         
         // Simulate some work
         usleep(150000);
@@ -148,4 +188,4 @@ int main(void) {
     pthread_join(consumer_thread, NULL);
     
     return 0;
-} 
+}
