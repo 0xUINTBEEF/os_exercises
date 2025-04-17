@@ -1,62 +1,88 @@
-# Operating System Concepts Examples and Explanations
+# Operating System Exercises
 
-This repository is a collection of examples and explanations of OS concepts, written in C.
+A comprehensive collection of operating system programming exercises focusing on process management, thread synchronization, and concurrent programming implementations.
 
-## Directory Structure
+## Project Structure
 
-- `threads/`: Examples demonstrating thread concepts
-  - Thread creation and management
-  - Thread synchronization
-  - Thread-safe operations
+- **process/** - Process management and IPC implementations
+  - Process creation and scheduling examples
+  - Inter-process communication using pipes and shared memory
+  - OS book programming exercises
 
-- `process/`: Examples demonstrating process concepts
-  - Process creation and management
-  - Inter-Process Communication (IPC)
-  - Process scheduling
+- **synchronization/** - Thread synchronization mechanisms
+  - Monitor implementation with priority inheritance
+  - Dining philosophers problem solutions
+  - Readers-writers problem implementation
+  - Peterson's algorithm implementation
+  - Semaphore implementations
 
-- `synchronization/`: Examples demonstrating synchronization concepts
-  - Mutual exclusion
-  - Semaphores
-  - Deadlock prevention
+- **threads/** - Thread programming exercises
+  - Thread pool implementation
+  - Factorial and Fibonacci calculations using pthreads
+  - OS book thread programming exercises
 
-## Building and Running
+## Key Features
 
-Each directory contains its own Makefile for building and running examples.
+### Monitor Implementation
+- Thread-safe buffer operations with timeout support
+- Priority inheritance to prevent priority inversion
+- Deadlock detection capabilities
+- Comprehensive performance metrics
+  - Response time tracking
+  - Operation success/failure monitoring
+  - Timeout statistics
 
-### Requirements
+### Synchronization Primitives
+- Mutex and condition variables
+- Semaphore implementation
+- Peterson's algorithm for mutual exclusion
+- Solutions to classic synchronization problems
 
-- C compiler (gcc)
-- POSIX threads library
-- Make
-- CMake (for some examples)
+### Thread Management
+- Thread creation and scheduling
+- Thread pool for task management
+- Priority-based thread execution
+- Performance measurement tools
 
-### Building
+## Building and Testing
 
+### Prerequisites
+- GCC compiler
+- POSIX threads library (pthread)
+- Make build system
+
+### Compilation
 ```bash
-# Build all examples
-make
+# Compile all projects
+make all
 
-# Build specific examples
-make -C threads
-make -C process
-make -C synchronization
+# Compile specific components
+cd synchronization && make
+cd threads && make
+cd process && make
 ```
 
 ### Running Tests
-
 ```bash
-make test
+# Test monitor implementation
+./synchronization/test_monitor
+
+# Run dining philosophers simulation
+./synchronization/dining_philosophers
 ```
 
-## Resources
+## Performance Metrics
 
-- [Operating System Concepts (10th Edition)](https://codex.cs.yale.edu/avi/os-book/OS10-global/)
-- [POSIX Threads Programming](https://computing.llnl.gov/tutorials/pthreads/)
-- [Linux System Programming](http://shop.oreilly.com/product/0636920026892.do)
+The test suite provides detailed performance metrics including:
+- Operation throughput
+- Average response time
+- Success/failure rates
+- Timeout statistics
+- Priority inversion incidents
 
-## Contribution
+## Contributing
 
-For adding new examples or fixing existing ones, please follow the [contribution guidelines](CONTRIBUTING.md).
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
 ## License
 
