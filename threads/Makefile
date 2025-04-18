@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -pthread
 LDFLAGS = -pthread
 
-SRCS = factorial_pthread.c fibonacci_pthread.c thread_pool.c
+SRCS = factorial_pthread.c fibonacci_pthread.c thread_pool.c thread_priority.c
 OBJS = $(SRCS:.c=.o)
 EXECS = $(SRCS:.c=)
 

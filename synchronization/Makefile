@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -pthread
 LDFLAGS = -pthread
 
-SRCS = peterson.c monitor.c
+SRCS = peterson.c monitor.c dining_philosophers.c readers_writers.c
 OBJS = $(SRCS:.c=.o)
 EXECS = $(SRCS:.c=)
 

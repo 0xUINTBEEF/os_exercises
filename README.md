@@ -1,4 +1,4 @@
-# Operating System Exercises
+# Operating System Concepts Visualization
 
 A comprehensive collection of operating system programming exercises focusing on process management, thread synchronization, and concurrent programming implementations.
 
@@ -7,6 +7,8 @@ A comprehensive collection of operating system programming exercises focusing on
 - **process/** - Process management and IPC implementations
   - Process creation and scheduling examples
   - Inter-process communication using pipes and shared memory
+  - Zombie process management and prevention
+  - Process isolation techniques
   - OS book programming exercises
 
 - **synchronization/** - Thread synchronization mechanisms
@@ -14,12 +16,23 @@ A comprehensive collection of operating system programming exercises focusing on
   - Dining philosophers problem solutions
   - Readers-writers problem implementation
   - Peterson's algorithm implementation
+  - Deadlock detection and prevention
+  - Barrier synchronization
   - Semaphore implementations
 
 - **threads/** - Thread programming exercises
   - Thread pool implementation
   - Factorial and Fibonacci calculations using pthreads
+  - Thread priority management
+  - Thread-local storage examples
+  - Thread-safe data structures
   - OS book thread programming exercises
+
+- **ui/** - User interface
+  - Terminal-based menu system
+  - Interactive visualization of OS concepts
+  - ASCII art visualizations
+  - Performance metrics display
 
 ## Key Features
 
@@ -37,12 +50,27 @@ A comprehensive collection of operating system programming exercises focusing on
 - Semaphore implementation
 - Peterson's algorithm for mutual exclusion
 - Solutions to classic synchronization problems
+  - Dining philosophers
+  - Readers-writers
+  - Producer-consumer
 
 ### Thread Management
 - Thread creation and scheduling
 - Thread pool for task management
 - Priority-based thread execution
+- Thread-local storage
+- Thread-safe data structures
 - Performance measurement tools
+
+### Process Management
+- Process creation and termination
+- Process scheduling algorithms
+- Zombie process prevention
+- Process isolation techniques
+- IPC mechanisms
+  - Pipes
+  - Shared memory
+  - Message queues
 
 ## Building and Testing
 
@@ -50,6 +78,7 @@ A comprehensive collection of operating system programming exercises focusing on
 - GCC compiler
 - POSIX threads library (pthread)
 - Make build system
+- ncurses library (for UI)
 
 ### Compilation
 ```bash
@@ -60,6 +89,7 @@ make all
 cd synchronization && make
 cd threads && make
 cd process && make
+cd ui && make
 ```
 
 ### Running Tests
@@ -69,6 +99,18 @@ cd process && make
 
 # Run dining philosophers simulation
 ./synchronization/dining_philosophers
+
+# Run thread pool example
+./threads/thread_pool
+
+# Run process scheduling example
+./process/process_scheduling
+```
+
+### Running the UI
+```bash
+cd ui
+./menu
 ```
 
 ## Performance Metrics
@@ -79,6 +121,8 @@ The test suite provides detailed performance metrics including:
 - Success/failure rates
 - Timeout statistics
 - Priority inversion incidents
+- Deadlock detection
+- Resource utilization
 
 ## Contributing
 

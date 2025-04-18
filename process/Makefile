@@ -1,14 +1,14 @@
 CC = gcc
-CFLAGS = -Wall -Wextra
+CFLAGS = -Wall -Wextra -g
 LDFLAGS = 
 
-SRCS = process_creation.c process_scheduling.c
+SRCS = process_creation.c process_scheduling.c zombie_process.c
 OBJS = $(SRCS:.c=.o)
-EXECS = $(SRCS:.c=)
+EXES = $(SRCS:.c=)
 
 .PHONY: all clean test
 
-all: $(EXECS)
+all: $(EXES)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -17,11 +17,11 @@ all: $(EXECS)
 	$(CC) $(LDFLAGS) $< -o $@
 
 clean:
-	rm -f $(OBJS) $(EXECS)
+	rm -f $(OBJS) $(EXES)
 
 test: all
 	@echo "Running tests..."
-	@for exec in $(EXECS); do \
+	@for exec in $(EXES); do \
 		echo "Testing $$exec..."; \
 		./$$exec; \
 	done 
