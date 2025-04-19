@@ -1,8 +1,8 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -pthread
-LDFLAGS = -pthread
+LDFLAGS = -pthread -lncurses
 
-SRCS = factorial_pthread.c fibonacci_pthread.c thread_pool.c thread_priority.c
+SRCS = factorial_pthread.c fibonacci_pthread.c thread_pool.c thread_priority.c thread_scheduler.c
 OBJS = $(SRCS:.c=.o)
 EXECS = $(SRCS:.c=)
 
