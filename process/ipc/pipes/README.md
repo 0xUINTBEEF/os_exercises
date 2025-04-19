@@ -1,61 +1,83 @@
-# Pipe IPC
+# Pipe Communication Examples
 
-This folder contains examples of pipe usage in C.
+This directory contains examples of inter-process communication using pipes in Unix-like operating systems.
 
-## How to run
+## Examples
 
-There are three types of pipe examples in this folder:
+### Bidirectional Communication (`bidirectional.c`)
 
-- [unidirectional.c](unidirectional.c): Unidirectional unnamed pipe.
-- [bidirectional.c](bidirectional.c): Bidirectional unnamed pipe.
-- [named_pipe.c](named_pipe.c): Named pipe (FIFO).
+Demonstrates bidirectional communication between parent and child processes using two pipes:
+- One pipe for parent-to-child communication
+- One pipe for child-to-parent communication
 
-To compile and run each example, use the following commands:
+Features:
+- Bidirectional communication
+- Error handling
+- Graceful shutdown
+- Safe buffer management
+- Signal handling
+- Resource cleanup
+
+### Named Pipe (FIFO) Communication (`named_pipe.c`)
+
+Demonstrates communication between parent and child processes using a named pipe (FIFO):
+- Named pipe creation and management
+- One-way communication
+- File system persistence
+
+Features:
+- Named pipe creation and cleanup
+- Error handling
+- Graceful shutdown
+- Safe buffer management
+- Signal handling
+- Resource cleanup
+
+### Unidirectional Pipe Communication (`unidirectional.c`)
+
+Demonstrates one-way communication between parent and child processes using an unnamed pipe:
+- Simple pipe creation
+- One-way communication
+- Process synchronization
+
+Features:
+- Unidirectional communication
+- Error handling
+- Graceful shutdown
+- Safe buffer management
+- Resource cleanup
+
+## Building and Running
+
+To build all examples:
 
 ```bash
-gcc <example-name>.c -o <example-name>.out
+make
 ```
 
-**NOTE:** Named pipe example removes the FIFO file after running. If you want to keep the FIFO file, comment the `unlink` call at the end.
+To run all examples:
 
-## How does it work?
+```bash
+make test
+```
 
-Pipes are one of the intercommunication mechanisms in *nix systems. There are two types of pipes:
+To clean up:
 
-1. **Unnamed Pipes**:
+```bash
+make clean
+```
 
-- Unnamed pipes don't have a name.
-- Unnamed pipes can be used between **related processes.**
-- When process terminates, the pipe is **closed automatically.**
-- It is **unidirectional.**
+## Requirements
 
-2. **Named Pipes (FIFO)**:
+- GCC compiler
+- POSIX-compliant operating system
+- Make build system
 
-- Named pipes has a name, and it is represented as a **file** in the file system.
-- Named pipes can be used between **unrelated processes.**
-- When one of the processes terminates, the named pipe **still exists**.
-- It is **bidirectional.**
+## Notes
 
-### Functions
-
-- `pipe()`: Creates a pipe.
-  Parameters:
-  - `int pipefd[2]`: Array to store the file descriptors of the pipe.
-    - `pipefd[0]`: File descriptor for reading.
-    - `pipefd[1]`: File descriptor for writing.
-  Returns:
-    - `0` on success.
-    - `-1` on error.
-- `mkfifo()`: Creates a named pipe.
-  Parameters:
-  - `const char* pathname`: Pathname of the FIFO file.
-  - `mode_t mode`: Permissions of the FIFO file.
-  Returns:
-    - `0` on success.
-    - `-1` on error.
-- `unlink()`: Removes the named pipe.
-  Parameters:
-  - `const char* pathname`: Pathname of the FIFO file.
-  Returns:
-    - `0` on success.
-    - `-1` on error.
+- All examples demonstrate proper resource management and error handling
+- Signal handling is implemented for graceful shutdown
+- Buffer sizes are defined as constants for easy modification
+- All file descriptors are properly closed
+- Process status is checked and reported
+- Named pipes persist in the file system until explicitly removed

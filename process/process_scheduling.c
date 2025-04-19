@@ -1,10 +1,16 @@
 /**
- * @file process_scheduling.c
- * @brief Demonstration of process scheduling concepts
+ * Process Scheduling Demonstration
  * 
  * This program demonstrates different process scheduling concepts
  * including priority scheduling and round-robin scheduling.
  * It uses fork() to create child processes and set their priorities.
+ * 
+ * Features:
+ * - Priority-based scheduling
+ * - Round-robin scheduling
+ * - Process priority management
+ * - Error handling
+ * - Resource cleanup
  */
 
 #include <stdio.h>
@@ -15,30 +21,42 @@
 #include <sys/resource.h>
 #include <sched.h>
 #include <time.h>
+#include <errno.h>
+#include <signal.h>
+#include <string.h>
 
+// Constants
 #define NUM_PROCESSES 3
-#define TIME_SLICE 100000 // 100ms in microseconds
+#define TIME_SLICE 100000  // 100ms in microseconds
+#define MAX_PRIORITY 19
+#define MIN_PRIORITY -20
 
-/**
- * @brief Structure to hold process information
- */
+// Process information structure
 typedef struct {
     pid_t pid;
     int priority;
     int burst_time;
     int remaining_time;
+    char name[32];
 } process_t;
 
-process_t processes[NUM_PROCESSES];
+// Global variables
+static process_t processes[NUM_PROCESSES];
+static volatile sig_atomic_t running = 1;
 
-/**
- * @brief Set process priority using nice value
- * 
- * @param pid Process ID
- * @param priority Nice value (-20 to 19)
- * @return int 0 on success, -1 on failure
- */
-int set_process_priority(pid_t pid, int priority) {
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+// Set process priority using nice value
+static int set_process_priority(pid_t pid, int priority) {
+    if (priority < MIN_PRIORITY || priority > MAX_PRIORITY) {
+        fprintf(stderr, "Invalid priority value: %d\n", priority);
+        return -1;
+    }
+
     if (setpriority(PRIO_PROCESS, pid, priority) == -1) {
         perror("setpriority failed");
         return -1;
@@ -46,38 +64,32 @@ int set_process_priority(pid_t pid, int priority) {
     return 0;
 }
 
-/**
- * @brief Simulate CPU burst for a process
- * 
- * @param process The process to run
- */
-void run_process(process_t* process) {
-    printf("Process %d running with priority %d\n", 
-           process->pid, process->priority);
+// Simulate CPU burst for a process
+static void run_process(process_t* process) {
+    printf("Process %s (PID: %d) running with priority %d\n", 
+           process->name, process->pid, process->priority);
     
     // Simulate CPU burst
     struct timespec ts;
     ts.tv_sec = 0;
-    ts.tv_nsec = TIME_SLICE * 1000; // Convert to nanoseconds
+    ts.tv_nsec = TIME_SLICE * 1000;  // Convert to nanoseconds
     
     nanosleep(&ts, NULL);
     
     process->remaining_time -= TIME_SLICE;
     if (process->remaining_time <= 0) {
-        printf("Process %d completed\n", process->pid);
+        printf("Process %s completed\n", process->name);
     }
 }
 
-/**
- * @brief Round-robin scheduler implementation
- */
-void round_robin_scheduler(void) {
+// Round-robin scheduler implementation
+static void round_robin_scheduler(void) {
     printf("\nRound-Robin Scheduling:\n");
     
-    while (1) {
+    while (running) {
         int all_completed = 1;
         
-        for (int i = 0; i < NUM_PROCESSES; i++) {
+        for (int i = 0; i < NUM_PROCESSES && running; i++) {
             if (processes[i].remaining_time > 0) {
                 all_completed = 0;
                 run_process(&processes[i]);
@@ -88,10 +100,8 @@ void round_robin_scheduler(void) {
     }
 }
 
-/**
- * @brief Priority scheduler implementation
- */
-void priority_scheduler(void) {
+// Priority scheduler implementation
+static void priority_scheduler(void) {
     printf("\nPriority Scheduling:\n");
     
     // Sort processes by priority (higher priority first)
@@ -106,44 +116,49 @@ void priority_scheduler(void) {
     }
     
     // Run processes in priority order
-    for (int i = 0; i < NUM_PROCESSES; i++) {
-        while (processes[i].remaining_time > 0) {
+    for (int i = 0; i < NUM_PROCESSES && running; i++) {
+        while (processes[i].remaining_time > 0 && running) {
             run_process(&processes[i]);
         }
     }
 }
 
-/**
- * @brief Main function demonstrating process scheduling
- */
 int main(void) {
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
     // Initialize processes
     for (int i = 0; i < NUM_PROCESSES; i++) {
         pid_t pid = fork();
         
         if (pid < 0) {
             perror("fork failed");
-            exit(1);
+            return EXIT_FAILURE;
         }
         else if (pid == 0) {
             // Child process
             processes[i].pid = getpid();
-            processes[i].priority = 10 - i; // Higher number = lower priority
+            processes[i].priority = MAX_PRIORITY - i;  // Higher number = lower priority
             processes[i].burst_time = (i + 1) * TIME_SLICE * 2;
             processes[i].remaining_time = processes[i].burst_time;
+            snprintf(processes[i].name, sizeof(processes[i].name), "Process%d", i);
             
             // Set process priority
-            set_process_priority(getpid(), processes[i].priority);
+            if (set_process_priority(getpid(), processes[i].priority) == -1) {
+                return EXIT_FAILURE;
+            }
             
             // Child processes exit after initialization
-            exit(0);
+            return EXIT_SUCCESS;
         }
         else {
             // Parent process
             processes[i].pid = pid;
-            processes[i].priority = 10 - i;
+            processes[i].priority = MAX_PRIORITY - i;
             processes[i].burst_time = (i + 1) * TIME_SLICE * 2;
             processes[i].remaining_time = processes[i].burst_time;
+            snprintf(processes[i].name, sizeof(processes[i].name), "Process%d", i);
         }
     }
     
@@ -154,5 +169,11 @@ int main(void) {
     round_robin_scheduler();
     priority_scheduler();
     
-    return 0;
+    // Wait for all child processes to complete
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        int status;
+        waitpid(processes[i].pid, &status, 0);
+    }
+    
+    return EXIT_SUCCESS;
 } 

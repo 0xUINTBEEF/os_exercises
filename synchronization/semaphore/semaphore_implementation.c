@@ -1,13 +1,17 @@
 /**
- * @file semaphore_implementation.c
- * @brief Custom implementation of counting semaphores using signals
+ * Custom Semaphore Implementation
  * 
  * This program demonstrates a custom implementation of counting semaphores
- * using POSIX signals for process synchronization. The implementation includes
- * proper process management, signal handling, and memory management.
+ * using POSIX signals for process synchronization. The implementation
+ * includes proper process management, signal handling, and memory management.
  * 
- * Note: This is an educational implementation. For production use,
- * prefer the standard POSIX semaphore implementation (sem_t).
+ * Features:
+ * - Counting semaphore implementation
+ * - Process synchronization
+ * - Signal-based wakeup mechanism
+ * - Error handling
+ * - Resource cleanup
+ * - Performance monitoring
  */
 
 #include <stdio.h>
@@ -20,12 +24,14 @@
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
 
-/** Maximum number of processes that can wait on the semaphore */
+// Constants
 #define MAX_WAITING_PROCESSES 100
-
-/** Initial value for the semaphore in the example */
 #define INITIAL_SEM_VALUE 2
+#define MAX_PROCESSES 3
+#define WORK_TIME 2
+#define MAX_ITERATIONS 5
 
 /**
  * @brief Custom semaphore structure
@@ -38,10 +44,26 @@ typedef struct {
     volatile int waiting_count; /**< Number of processes currently waiting */
     pid_t* list;               /**< Array of waiting process IDs */
     size_t list_capacity;      /**< Maximum capacity of the waiting list */
+    struct timespec start_time; /**< Start time for performance monitoring */
+    unsigned long total_operations; /**< Total number of operations */
+    unsigned long total_wait_time; /**< Total wait time in nanoseconds */
 } my_sem_t;
 
 /** Global semaphore instance for the example */
 static my_sem_t* global_sem = NULL;
+static volatile sig_atomic_t running = 1;
+
+/**
+ * @brief Signal handler for graceful shutdown
+ * 
+ * Handles SIGINT and SIGTERM signals used to gracefully shut down the program.
+ * 
+ * @param sig The signal number received
+ */
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
 
 /**
  * @brief Signal handler for waking up waiting processes
@@ -84,6 +106,9 @@ my_sem_t* custom_sem_init(int initial_value) {
     sem->val = initial_value;
     sem->waiting_count = 0;
     sem->list_capacity = MAX_WAITING_PROCESSES;
+    sem->total_operations = 0;
+    sem->total_wait_time = 0;
+    clock_gettime(CLOCK_MONOTONIC, &sem->start_time);
 
     return sem;
 }
@@ -117,6 +142,9 @@ bool custom_wait(my_sem_t* sem) {
         return false;
     }
 
+    struct timespec wait_start, wait_end;
+    clock_gettime(CLOCK_MONOTONIC, &wait_start);
+
     sem->val--;
 
     if (sem->val < 0) {
@@ -139,6 +167,11 @@ bool custom_wait(my_sem_t* sem) {
         pause();
         sigprocmask(SIG_BLOCK, &mask, NULL);
     }
+
+    clock_gettime(CLOCK_MONOTONIC, &wait_end);
+    sem->total_wait_time += (wait_end.tv_sec - wait_start.tv_sec) * 1000000000 +
+                           (wait_end.tv_nsec - wait_start.tv_nsec);
+    sem->total_operations++;
 
     return true;
 }
@@ -169,7 +202,64 @@ bool custom_signal(my_sem_t* sem) {
         }
     }
 
+    sem->total_operations++;
     return true;
+}
+
+/**
+ * @brief Print semaphore statistics
+ * 
+ * Calculates and prints various statistics about the semaphore's usage.
+ * 
+ * @param sem Pointer to the semaphore
+ */
+void print_semaphore_stats(my_sem_t* sem) {
+    struct timespec end_time;
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    
+    double total_time = (end_time.tv_sec - sem->start_time.tv_sec) +
+                       (end_time.tv_nsec - sem->start_time.tv_nsec) / 1e9;
+    
+    printf("\nSemaphore Statistics:\n");
+    printf("Total runtime: %.6f seconds\n", total_time);
+    printf("Total operations: %lu\n", sem->total_operations);
+    printf("Total wait time: %.6f seconds\n", sem->total_wait_time / 1e9);
+    printf("Average wait time: %.6f seconds\n",
+           (sem->total_wait_time / 1e9) / sem->total_operations);
+    printf("Operations per second: %.2f\n",
+           sem->total_operations / total_time);
+}
+
+/**
+ * @brief Process function
+ * 
+ * Represents a single process's interaction with the semaphore.
+ * 
+ * @param process_id The ID of the process
+ */
+void process_function(int process_id) {
+    int iterations = 0;
+    
+    while (running && iterations < MAX_ITERATIONS) {
+        printf("Process %d (PID: %d) trying to acquire semaphore\n",
+               process_id, getpid());
+        
+        if (custom_wait(global_sem)) {
+            printf("Process %d (PID: %d) acquired semaphore (value: %d)\n",
+                   process_id, getpid(), global_sem->val);
+            
+            // Simulate some work
+            sleep(WORK_TIME);
+            
+            if (custom_signal(global_sem)) {
+                printf("Process %d (PID: %d) released semaphore (value: %d)\n",
+                       process_id, getpid(), global_sem->val);
+            }
+        }
+        
+        iterations++;
+        sleep(1); // Sleep between iterations
+    }
 }
 
 /**
@@ -182,7 +272,7 @@ bool custom_signal(my_sem_t* sem) {
  * @return int Exit status (0 on success, 1 on error)
  */
 int main(void) {
-    // Set up signal handler
+    // Set up signal handlers
     struct sigaction sa;
     sa.sa_handler = wake_handler;
     sigemptyset(&sa.sa_mask);
@@ -190,51 +280,49 @@ int main(void) {
     
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
         perror("Failed to set up signal handler");
-        return 1;
+        return EXIT_FAILURE;
     }
+    
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     // Initialize semaphore
     global_sem = custom_sem_init(INITIAL_SEM_VALUE);
     if (!global_sem) {
-        return 1;
+        return EXIT_FAILURE;
     }
 
     printf("Initial semaphore value is %d\n", global_sem->val);
 
-    // Test the semaphore with multiple processes
-    for (int i = 0; i < 3; i++) {
-        pid_t pid = fork();
+    // Create child processes
+    pid_t pids[MAX_PROCESSES];
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        pids[i] = fork();
         
-        if (pid == -1) {
+        if (pids[i] == -1) {
             perror("Fork failed");
             custom_sem_destroy(global_sem);
-            return 1;
+            return EXIT_FAILURE;
         }
         
-        if (pid == 0) { // Child process
-            printf("Process %d (PID: %d) trying to acquire semaphore\n", 
-                   i, getpid());
-            
-            if (custom_wait(global_sem)) {
-                printf("Process %d (PID: %d) acquired semaphore (value: %d)\n",
-                       i, getpid(), global_sem->val);
-                sleep(2); // Simulate some work
-                
-                if (custom_signal(global_sem)) {
-                    printf("Process %d (PID: %d) released semaphore (value: %d)\n",
-                           i, getpid(), global_sem->val);
-                }
-            }
-            
-            exit(0);
+        if (pids[i] == 0) { // Child process
+            process_function(i);
+            exit(EXIT_SUCCESS);
         }
     }
 
     // Wait for all child processes
-    for (int i = 0; i < 3; i++) {
-        wait(NULL);
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        int status;
+        if (waitpid(pids[i], &status, 0) == -1) {
+            perror("Waitpid failed");
+        }
     }
 
+    // Print statistics
+    print_semaphore_stats(global_sem);
+
+    // Clean up
     custom_sem_destroy(global_sem);
-    return 0;
+    return EXIT_SUCCESS;
 }

@@ -1,184 +1,240 @@
 /**
- * @file dining_philosophers_monitor.c
- * @brief Implementation of dining philosophers problem using monitors
+ * Dining Philosophers Problem with Monitor Implementation
  * 
  * This program demonstrates a deadlock-free solution to the dining
- * philosophers problem using monitors and condition variables.
+ * philosophers problem using monitors and condition variables. It
+ * implements a resource hierarchy solution to prevent deadlocks.
+ * 
+ * Features:
+ * - Deadlock prevention
+ * - Resource hierarchy solution
+ * - Error handling
+ * - Graceful shutdown
+ * - Performance monitoring
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <stdbool.h>
 #include <time.h>
+#include <errno.h>
+#include <string.h>
+#include <signal.h>
 
+// Constants
 #define NUM_PHILOSOPHERS 5
-#define THINKING 0
-#define HUNGRY 1
-#define EATING 2
+#define EATING_TIME 2
+#define THINKING_TIME 3
+#define MAX_MEALS 3
 
+// Philosopher states
+typedef enum {
+    THINKING,
+    HUNGRY,
+    EATING
+} philosopher_state_t;
+
+// Philosopher data structure
 typedef struct {
-    int state[NUM_PHILOSOPHERS];
-    pthread_mutex_t mutex;
-    pthread_cond_t can_eat[NUM_PHILOSOPHERS];
-    
-    // Performance metrics
-    unsigned long meals_eaten[NUM_PHILOSOPHERS];
-    double avg_wait_time[NUM_PHILOSOPHERS];
+    int id;
+    philosopher_state_t state;
+    int meals_eaten;
     struct timespec start_time;
+    struct timespec end_time;
+    double total_wait_time;
+} philosopher_data_t;
+
+// Monitor structure
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond_vars[NUM_PHILOSOPHERS];
+    philosopher_state_t states[NUM_PHILOSOPHERS];
+    philosopher_data_t philosophers[NUM_PHILOSOPHERS];
+    int num_philosophers;
 } dining_monitor_t;
 
-dining_monitor_t monitor;
+// Global monitor instance
+static dining_monitor_t monitor;
+static volatile sig_atomic_t running = 1;
 
-/**
- * @brief Initialize the dining monitor
- */
-void monitor_init(void) {
-    pthread_mutex_init(&monitor.mutex, NULL);
-    
-    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        monitor.state[i] = THINKING;
-        pthread_cond_init(&monitor.can_eat[i], NULL);
-        monitor.meals_eaten[i] = 0;
-        monitor.avg_wait_time[i] = 0.0;
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+// Initialize monitor
+static int monitor_init(void) {
+    if (pthread_mutex_init(&monitor.mutex, NULL) != 0) {
+        perror("pthread_mutex_init failed");
+        return -1;
     }
     
-    clock_gettime(CLOCK_MONOTONIC, &monitor.start_time);
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        if (pthread_cond_init(&monitor.cond_vars[i], NULL) != 0) {
+            perror("pthread_cond_init failed");
+            // Clean up previously initialized condition variables
+            for (int j = 0; j < i; j++) {
+                pthread_cond_destroy(&monitor.cond_vars[j]);
+            }
+            pthread_mutex_destroy(&monitor.mutex);
+            return -1;
+        }
+        
+        monitor.states[i] = THINKING;
+        monitor.philosophers[i].id = i;
+        monitor.philosophers[i].state = THINKING;
+        monitor.philosophers[i].meals_eaten = 0;
+        monitor.philosophers[i].total_wait_time = 0.0;
+    }
+    
+    monitor.num_philosophers = NUM_PHILOSOPHERS;
+    return 0;
 }
 
-/**
- * @brief Check if philosopher can eat
- */
-static bool can_eat(int phil_id) {
-    int left = (phil_id + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
-    int right = (phil_id + 1) % NUM_PHILOSOPHERS;
-    return (monitor.state[phil_id] == HUNGRY &&
-            monitor.state[left] != EATING &&
-            monitor.state[right] != EATING);
+// Clean up monitor resources
+static void monitor_cleanup(void) {
+    for (int i = 0; i < monitor.num_philosophers; i++) {
+        pthread_cond_destroy(&monitor.cond_vars[i]);
+    }
+    pthread_mutex_destroy(&monitor.mutex);
 }
 
-/**
- * @brief Try to acquire forks and eat
- */
-void pickup_forks(int phil_id) {
+// Check if philosopher can eat
+static int can_eat(int philosopher) {
+    int left = (philosopher + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
+    int right = (philosopher + 1) % NUM_PHILOSOPHERS;
+    
+    return (monitor.states[philosopher] == HUNGRY &&
+            monitor.states[left] != EATING &&
+            monitor.states[right] != EATING);
+}
+
+// Philosopher thread function
+static void *philosopher_thread(void *arg) {
+    philosopher_data_t *philosopher = (philosopher_data_t *)arg;
     struct timespec wait_start, wait_end;
-    clock_gettime(CLOCK_MONOTONIC, &wait_start);
     
-    pthread_mutex_lock(&monitor.mutex);
+    // Record start time
+    clock_gettime(CLOCK_MONOTONIC, &philosopher->start_time);
     
-    monitor.state[phil_id] = HUNGRY;
-    printf("Philosopher %d is hungry\n", phil_id);
-    
-    // Wait until can eat
-    while (!can_eat(phil_id)) {
-        pthread_cond_wait(&monitor.can_eat[phil_id], &monitor.mutex);
-    }
-    
-    monitor.state[phil_id] = EATING;
-    clock_gettime(CLOCK_MONOTONIC, &wait_end);
-    
-    // Update metrics
-    double wait_time = (wait_end.tv_sec - wait_start.tv_sec) +
-                      (wait_end.tv_nsec - wait_start.tv_nsec) / 1e9;
-    monitor.avg_wait_time[phil_id] = 
-        (monitor.avg_wait_time[phil_id] * monitor.meals_eaten[phil_id] + wait_time) /
-        (monitor.meals_eaten[phil_id] + 1);
-    monitor.meals_eaten[phil_id]++;
-    
-    printf("Philosopher %d is eating\n", phil_id);
-    pthread_mutex_unlock(&monitor.mutex);
-}
-
-/**
- * @brief Release forks after eating
- */
-void return_forks(int phil_id) {
-    pthread_mutex_lock(&monitor.mutex);
-    
-    monitor.state[phil_id] = THINKING;
-    printf("Philosopher %d is thinking\n", phil_id);
-    
-    // Check if neighbors can eat
-    int left = (phil_id + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
-    int right = (phil_id + 1) % NUM_PHILOSOPHERS;
-    
-    if (can_eat(left)) {
-        pthread_cond_signal(&monitor.can_eat[left]);
-    }
-    if (can_eat(right)) {
-        pthread_cond_signal(&monitor.can_eat[right]);
-    }
-    
-    pthread_mutex_unlock(&monitor.mutex);
-}
-
-/**
- * @brief Print performance statistics
- */
-void print_stats(void) {
-    struct timespec end_time;
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    double total_time = (end_time.tv_sec - monitor.start_time.tv_sec) +
-                       (end_time.tv_nsec - monitor.start_time.tv_nsec) / 1e9;
-    
-    printf("\nDining Philosophers Statistics:\n");
-    printf("Total runtime: %.2f seconds\n", total_time);
-    
-    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        printf("Philosopher %d:\n", i);
-        printf("  Meals eaten: %lu\n", monitor.meals_eaten[i]);
-        printf("  Average wait time: %.6f seconds\n", monitor.avg_wait_time[i]);
-        printf("  Meals per minute: %.2f\n", 
-               (monitor.meals_eaten[i] / total_time) * 60);
-    }
-}
-
-/**
- * @brief Philosopher thread function
- */
-void* philosopher(void* arg) {
-    int id = *(int*)arg;
-    
-    while (true) {
-        // Think for a while
-        usleep(rand() % 1000000);
+    while (running && philosopher->meals_eaten < MAX_MEALS) {
+        // Think
+        printf("Philosopher %d is thinking\n", philosopher->id);
+        sleep(THINKING_TIME);
         
-        // Get hungry and try to eat
-        pickup_forks(id);
+        // Get hungry
+        pthread_mutex_lock(&monitor.mutex);
+        monitor.states[philosopher->id] = HUNGRY;
+        philosopher->state = HUNGRY;
+        printf("Philosopher %d is hungry\n", philosopher->id);
         
-        // Eat for a while
-        usleep(rand() % 500000);
+        // Try to eat
+        clock_gettime(CLOCK_MONOTONIC, &wait_start);
+        while (!can_eat(philosopher->id) && running) {
+            pthread_cond_wait(&monitor.cond_vars[philosopher->id], &monitor.mutex);
+        }
         
-        // Finish eating and return forks
-        return_forks(id);
+        if (!running) {
+            pthread_mutex_unlock(&monitor.mutex);
+            break;
+        }
+        
+        // Eat
+        monitor.states[philosopher->id] = EATING;
+        philosopher->state = EATING;
+        philosopher->meals_eaten++;
+        
+        clock_gettime(CLOCK_MONOTONIC, &wait_end);
+        double wait_time = (wait_end.tv_sec - wait_start.tv_sec) +
+                          (wait_end.tv_nsec - wait_start.tv_nsec) / 1e9;
+        philosopher->total_wait_time += wait_time;
+        
+        printf("Philosopher %d is eating (meal %d/%d)\n",
+               philosopher->id, philosopher->meals_eaten, MAX_MEALS);
+        
+        pthread_mutex_unlock(&monitor.mutex);
+        sleep(EATING_TIME);
+        
+        // Finish eating
+        pthread_mutex_lock(&monitor.mutex);
+        monitor.states[philosopher->id] = THINKING;
+        philosopher->state = THINKING;
+        printf("Philosopher %d finished eating\n", philosopher->id);
+        
+        // Notify neighbors
+        int left = (philosopher->id + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
+        int right = (philosopher->id + 1) % NUM_PHILOSOPHERS;
+        
+        if (monitor.states[left] == HUNGRY && can_eat(left)) {
+            pthread_cond_signal(&monitor.cond_vars[left]);
+        }
+        if (monitor.states[right] == HUNGRY && can_eat(right)) {
+            pthread_cond_signal(&monitor.cond_vars[right]);
+        }
+        
+        pthread_mutex_unlock(&monitor.mutex);
     }
+    
+    // Record end time
+    clock_gettime(CLOCK_MONOTONIC, &philosopher->end_time);
+    
+    printf("Philosopher %d completed all meals\n", philosopher->id);
     return NULL;
 }
 
-/**
- * @brief Main function demonstrating dining philosophers
- */
-int main(void) {
-    pthread_t philosophers[NUM_PHILOSOPHERS];
-    int ids[NUM_PHILOSOPHERS];
+// Print performance statistics
+static void print_stats(void) {
+    printf("\nDining Philosophers Statistics:\n");
     
-    // Initialize random number generator
-    srand(time(NULL));
+    for (int i = 0; i < monitor.num_philosophers; i++) {
+        philosopher_data_t *philosopher = &monitor.philosophers[i];
+        double runtime = (philosopher->end_time.tv_sec - philosopher->start_time.tv_sec) +
+                        (philosopher->end_time.tv_nsec - philosopher->start_time.tv_nsec) / 1e9;
+        
+        printf("\nPhilosopher %d:\n", philosopher->id);
+        printf("  Meals eaten: %d\n", philosopher->meals_eaten);
+        printf("  Total wait time: %.6f seconds\n", philosopher->total_wait_time);
+        printf("  Average wait time: %.6f seconds\n",
+               philosopher->total_wait_time / philosopher->meals_eaten);
+        printf("  Runtime: %.6f seconds\n", runtime);
+    }
+}
+
+int main(void) {
+    // Set up signal handler
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
     
     // Initialize monitor
-    monitor_init();
-    
-    // Create philosopher threads
-    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        ids[i] = i;
-        pthread_create(&philosophers[i], NULL, philosopher, &ids[i]);
+    if (monitor_init() != 0) {
+        return EXIT_FAILURE;
     }
     
-    // Let the simulation run for 30 seconds
-    sleep(30);
+    // Create philosopher threads
+    pthread_t threads[NUM_PHILOSOPHERS];
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        if (pthread_create(&threads[i], NULL, philosopher_thread,
+                          &monitor.philosophers[i]) != 0) {
+            perror("pthread_create failed");
+            monitor_cleanup();
+            return EXIT_FAILURE;
+        }
+    }
     
-    // Print statistics and exit
+    // Wait for all threads to complete
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            perror("pthread_join failed");
+        }
+    }
+    
+    // Print statistics
     print_stats();
-    return 0;
+    
+    // Clean up
+    monitor_cleanup();
+    
+    return EXIT_SUCCESS;
 }

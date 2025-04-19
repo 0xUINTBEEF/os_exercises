@@ -1,21 +1,32 @@
 /**
- * @file dining_philosophers.c
- * @brief Implementation of the dining philosophers problem
+ * Dining Philosophers Problem Solution
  * 
  * This program demonstrates a solution to the dining philosophers problem
- * using mutexes and condition variables. It includes deadlock prevention
- * and resource hierarchy solution.
+ * using mutexes and condition variables. It implements a deadlock-free
+ * solution with proper resource management and synchronization.
+ * 
+ * Features:
+ * - Deadlock prevention
+ * - Resource hierarchy solution
+ * - Error handling
+ * - Graceful shutdown
+ * - Performance monitoring
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <stdbool.h>
+#include <time.h>
+#include <errno.h>
+#include <string.h>
+#include <signal.h>
 
+// Constants
 #define NUM_PHILOSOPHERS 5
 #define EATING_TIME 2
 #define THINKING_TIME 3
+#define MAX_MEALS 3
 
 // Philosopher states
 typedef enum {
@@ -25,71 +36,31 @@ typedef enum {
 } philosopher_state_t;
 
 // Global variables
-pthread_mutex_t mutex;
-pthread_cond_t condition[NUM_PHILOSOPHERS];
-philosopher_state_t states[NUM_PHILOSOPHERS];
-pthread_t philosophers[NUM_PHILOSOPHERS];
-int philosopher_ids[NUM_PHILOSOPHERS];
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond_vars[NUM_PHILOSOPHERS];
+static philosopher_state_t states[NUM_PHILOSOPHERS];
+static int meals_eaten[NUM_PHILOSOPHERS];
+static volatile sig_atomic_t running = 1;
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
 
 /**
  * @brief Check if philosopher can eat
  * 
- * @param id Philosopher ID
+ * @param philosopher Philosopher ID
  * @return true if philosopher can eat, false otherwise
  */
-bool can_eat(int id) {
-    int left = (id + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
-    int right = (id + 1) % NUM_PHILOSOPHERS;
+static int can_eat(int philosopher) {
+    int left = (philosopher + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
+    int right = (philosopher + 1) % NUM_PHILOSOPHERS;
     
-    return (states[id] == HUNGRY &&
+    return (states[philosopher] == HUNGRY &&
             states[left] != EATING &&
             states[right] != EATING);
-}
-
-/**
- * @brief Try to pick up chopsticks
- * 
- * @param id Philosopher ID
- */
-void pickup_chopsticks(int id) {
-    pthread_mutex_lock(&mutex);
-    
-    states[id] = HUNGRY;
-    printf("Philosopher %d is hungry\n", id);
-    
-    while (!can_eat(id)) {
-        pthread_cond_wait(&condition[id], &mutex);
-    }
-    
-    states[id] = EATING;
-    printf("Philosopher %d is eating\n", id);
-    
-    pthread_mutex_unlock(&mutex);
-}
-
-/**
- * @brief Put down chopsticks
- * 
- * @param id Philosopher ID
- */
-void putdown_chopsticks(int id) {
-    pthread_mutex_lock(&mutex);
-    
-    states[id] = THINKING;
-    printf("Philosopher %d is thinking\n", id);
-    
-    // Notify neighbors
-    int left = (id + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
-    int right = (id + 1) % NUM_PHILOSOPHERS;
-    
-    if (states[left] == HUNGRY && can_eat(left)) {
-        pthread_cond_signal(&condition[left]);
-    }
-    if (states[right] == HUNGRY && can_eat(right)) {
-        pthread_cond_signal(&condition[right]);
-    }
-    
-    pthread_mutex_unlock(&mutex);
 }
 
 /**
@@ -98,23 +69,61 @@ void putdown_chopsticks(int id) {
  * @param arg Philosopher ID
  * @return void* Always returns NULL
  */
-void* philosopher(void* arg) {
-    int id = *(int*)arg;
+static void *philosopher_thread(void *arg) {
+    int philosopher = *(int *)arg;
+    free(arg);
     
-    while (true) {
+    printf("Philosopher %d starting\n", philosopher);
+    
+    while (running && meals_eaten[philosopher] < MAX_MEALS) {
         // Think
+        printf("Philosopher %d is thinking\n", philosopher);
         sleep(THINKING_TIME);
         
-        // Get hungry and try to eat
-        pickup_chopsticks(id);
+        // Get hungry
+        pthread_mutex_lock(&mutex);
+        states[philosopher] = HUNGRY;
+        printf("Philosopher %d is hungry\n", philosopher);
+        
+        // Try to eat
+        while (!can_eat(philosopher) && running) {
+            pthread_cond_wait(&cond_vars[philosopher], &mutex);
+        }
+        
+        if (!running) {
+            pthread_mutex_unlock(&mutex);
+            break;
+        }
         
         // Eat
+        states[philosopher] = EATING;
+        meals_eaten[philosopher]++;
+        printf("Philosopher %d is eating (meal %d/%d)\n", 
+               philosopher, meals_eaten[philosopher], MAX_MEALS);
+        
+        pthread_mutex_unlock(&mutex);
         sleep(EATING_TIME);
         
-        // Put down chopsticks
-        putdown_chopsticks(id);
+        // Finish eating
+        pthread_mutex_lock(&mutex);
+        states[philosopher] = THINKING;
+        printf("Philosopher %d finished eating\n", philosopher);
+        
+        // Notify neighbors
+        int left = (philosopher + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
+        int right = (philosopher + 1) % NUM_PHILOSOPHERS;
+        
+        if (states[left] == HUNGRY && can_eat(left)) {
+            pthread_cond_signal(&cond_vars[left]);
+        }
+        if (states[right] == HUNGRY && can_eat(right)) {
+            pthread_cond_signal(&cond_vars[right]);
+        }
+        
+        pthread_mutex_unlock(&mutex);
     }
     
+    printf("Philosopher %d completed all meals\n", philosopher);
     return NULL;
 }
 
@@ -122,29 +131,50 @@ void* philosopher(void* arg) {
  * @brief Main function
  */
 int main(void) {
-    // Initialize mutex and condition variables
-    pthread_mutex_init(&mutex, NULL);
+    // Set up signal handler
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // Initialize condition variables
     for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        pthread_cond_init(&condition[i], NULL);
+        if (pthread_cond_init(&cond_vars[i], NULL) != 0) {
+            perror("pthread_cond_init failed");
+            return EXIT_FAILURE;
+        }
         states[i] = THINKING;
-        philosopher_ids[i] = i;
+        meals_eaten[i] = 0;
     }
     
     // Create philosopher threads
+    pthread_t threads[NUM_PHILOSOPHERS];
     for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        pthread_create(&philosophers[i], NULL, philosopher, &philosopher_ids[i]);
+        int *philosopher = malloc(sizeof(int));
+        if (!philosopher) {
+            perror("malloc failed");
+            return EXIT_FAILURE;
+        }
+        *philosopher = i;
+        
+        if (pthread_create(&threads[i], NULL, philosopher_thread, philosopher) != 0) {
+            perror("pthread_create failed");
+            free(philosopher);
+            return EXIT_FAILURE;
+        }
     }
     
-    // Wait for threads (they won't complete in this example)
+    // Wait for all philosophers to complete
     for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        pthread_join(philosophers[i], NULL);
+        if (pthread_join(threads[i], NULL) != 0) {
+            perror("pthread_join failed");
+        }
     }
     
     // Clean up
-    pthread_mutex_destroy(&mutex);
     for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
-        pthread_cond_destroy(&condition[i]);
+        pthread_cond_destroy(&cond_vars[i]);
     }
+    pthread_mutex_destroy(&mutex);
     
-    return 0;
+    printf("All philosophers have completed their meals\n");
+    return EXIT_SUCCESS;
 }

@@ -1,4 +1,18 @@
-#include <fcntl.h> // O_RDONLY, O_WRONLY
+/**
+ * Named Pipe (FIFO) Example
+ * 
+ * This program demonstrates communication between parent and child processes
+ * using a named pipe (FIFO). The parent writes to the pipe and the child reads from it.
+ * 
+ * Features:
+ * - Named pipe creation and management
+ * - Error handling
+ * - Graceful shutdown
+ * - Safe buffer management
+ * - Resource cleanup
+ */
+
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -6,84 +20,127 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <errno.h>
 
-int main(void)
-{
-    // Create a named pipe
-    char *pipe_name = "named_pipe"; // it is a file which is created in the current directory
+// Constants
+#define PIPE_NAME "named_pipe"
+#define BUFFER_SIZE 128
+#define NUM_MESSAGES 3
+#define PIPE_PERMISSIONS 0666
 
-    // Also note, if the pipe file already exists, mkfifo will fail with EEXIST
-    if (mkfifo(pipe_name, 0666) < 0) // FIFO is a special file with name pipe_name
-    {
-        perror("mkfifo");
-        exit(1);
+// Global variables for cleanup
+static volatile sig_atomic_t running = 1;
+static int pipe_fd = -1;
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+// Cleanup function
+static void cleanup(void) {
+    if (pipe_fd != -1) {
+        close(pipe_fd);
+    }
+    unlink(PIPE_NAME);
+}
+
+int main(void) {
+    pid_t reader;
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+    int status;
+
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    // Create named pipe
+    if (mkfifo(PIPE_NAME, PIPE_PERMISSIONS) < 0) {
+        if (errno != EEXIST) {
+            perror("mkfifo failed");
+            exit(EXIT_FAILURE);
+        }
     }
 
-    pid_t reader = fork();
-
-    if (reader < 0)
-    {
-        perror("fork");
-        exit(1);
+    // Fork process
+    reader = fork();
+    if (reader < 0) {
+        perror("fork failed");
+        cleanup();
+        exit(EXIT_FAILURE);
     }
-    else if (reader == 0)
-    {
-        int fd = open(pipe_name, O_RDONLY);
-        if (fd < 0)
-        {
-            perror("open");
-            exit(1);
+
+    if (reader == 0) {  // Child process (reader)
+        printf("Child process started\n");
+
+        // Open pipe for reading
+        pipe_fd = open(PIPE_NAME, O_RDONLY);
+        if (pipe_fd < 0) {
+            perror("child: open failed");
+            cleanup();
+            exit(EXIT_FAILURE);
         }
 
-        printf("Now reading from child\n");
-
-        char buf[128];
-
-        while (read(fd, buf, sizeof(buf)) > 0)
-        {
-            printf("Child process read: %s\n", buf);
-
-            // Clear the buffer
-            // When I didn't clear, the buffer printed previous message and current message in a blended way.
-            memset(buf, 0, sizeof(buf));
+        // Read messages from pipe
+        while (running && (bytes_read = read(pipe_fd, buffer, BUFFER_SIZE - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            printf("Child received: %s", buffer);
+            memset(buffer, 0, BUFFER_SIZE);
         }
 
-        close(fd);
+        if (bytes_read < 0 && errno != EINTR) {
+            perror("child: read error");
+            cleanup();
+            exit(EXIT_FAILURE);
+        }
 
+        close(pipe_fd);
         printf("Child process finished\n");
-    }
-    else
-    {
-        int fd = open(pipe_name, O_WRONLY);
-        if (fd < 0)
-        {
-            perror("open");
-            exit(1);
+        exit(EXIT_SUCCESS);
+    } else {  // Parent process (writer)
+        printf("Parent process started\n");
+
+        // Open pipe for writing
+        pipe_fd = open(PIPE_NAME, O_WRONLY);
+        if (pipe_fd < 0) {
+            perror("parent: open failed");
+            cleanup();
+            exit(EXIT_FAILURE);
         }
 
-        printf("Now writing from parent\n");
+        // Write messages to pipe
+        const char *messages[] = {
+            "Hello, World!\n",
+            "Morning!\n",
+            "Goodbye, World!\n"
+        };
 
-        // For passing messages (char array), strlen() is heavily recommended to use avoid the bugs.
-        // For variables, sizeof() is recommended to use.
-        write(fd, "Hello, World!\n", strlen("Hello, World!\n"));
-        write(fd, "Morning!\n", strlen("Morning!\n"));
-        write(fd, "Goodbye, World!", strlen("Goodbye, World!"));
+        for (int i = 0; i < NUM_MESSAGES && running; i++) {
+            if (write(pipe_fd, messages[i], strlen(messages[i])) < 0) {
+                perror("parent: write error");
+                cleanup();
+                exit(EXIT_FAILURE);
+            }
+        }
 
-        close(fd);
+        close(pipe_fd);
 
-        printf("Waiting until child process finishes...\n");
+        // Wait for child to finish
+        printf("Waiting for child process...\n");
+        wait(&status);
 
-        wait(NULL);
+        if (WIFEXITED(status)) {
+            printf("Child process exited with status: %d\n", WEXITSTATUS(status));
+        } else {
+            printf("Child process terminated abnormally\n");
+        }
 
         printf("Parent process finished\n");
-
-        // Remove the named pipe
-        if (unlink(pipe_name) < 0)
-        {
-            perror("unlink");
-            exit(1);
-        }
     }
 
-    return 0;
+    cleanup();
+    return EXIT_SUCCESS;
 }

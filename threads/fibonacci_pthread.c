@@ -1,137 +1,160 @@
 /**
- * @file fibonacci_pthread.c
- * @brief Implementation of Fibonacci sequence calculation using POSIX threads
+ * Fibonacci Sequence Calculation using POSIX Threads
  * 
- * This program demonstrates parallel computation of Fibonacci numbers using multiple threads.
- * The work is divided among THREADS number of threads, each calculating a range of Fibonacci numbers.
- * The implementation uses dynamic memory allocation and proper cleanup mechanisms.
+ * This program demonstrates parallel computation of Fibonacci sequence using multiple threads.
+ * Features include:
+ * - Parallel computation of large Fibonacci numbers
+ * - Thread-safe operations
+ * - Dynamic thread management
+ * - Error handling and resource cleanup
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <string.h>
+#include <errno.h>
 
-/** Number of threads to use for parallel computation */
-#define THREADS 10
+// Constants
+#define MAX_THREADS 4
+#define MAX_SEQUENCE 100
 
-/** Maximum Fibonacci number to calculate */
-#define MAX_NUMBER 40
-
-/**
- * @brief Structure to hold arguments for thread function
- * 
- * Contains the range of Fibonacci numbers that a thread should calculate.
- */
+// Structure to hold thread data
 typedef struct {
-    int lower_bound;  /**< Starting number in the range (inclusive) */
-    int upper_bound;  /**< Ending number in the range (exclusive) */
-} fibonacci_args;
+    int start;
+    int end;
+    unsigned long long *sequence;
+} thread_data_t;
+
+// Global variables
+static pthread_mutex_t sequence_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
- * @brief Calculates the nth Fibonacci number
- * 
- * Implements recursive Fibonacci calculation.
- * Note: This is not the most efficient implementation but serves as a good example
- * for demonstrating parallel computation.
- * 
- * @param n The position in Fibonacci sequence to calculate
- * @return int The nth Fibonacci number
+ * Calculate Fibonacci sequence for a range of numbers
+ * @param arg Thread data containing range and sequence array
+ * @return NULL
  */
-int fibonacci(int n) {
-    if (n <= 1) {
-        return n;  // Base case: F(0) = 0, F(1) = 1
+static void *fibonacci_range(void *arg) {
+    thread_data_t *data = (thread_data_t *)arg;
+    unsigned long long a, b, temp;
+    int i;
+
+    // Initialize first two numbers in the range
+    if (data->start <= 1) {
+        data->sequence[0] = 0;
+        data->sequence[1] = 1;
+        i = 2;
+    } else {
+        // Calculate previous two numbers
+        a = data->sequence[data->start - 2];
+        b = data->sequence[data->start - 1];
+        i = data->start;
     }
-    return fibonacci(n - 1) + fibonacci(n - 2);  // Recursive case
+
+    // Calculate Fibonacci numbers in the range
+    for (; i <= data->end; i++) {
+        temp = a + b;
+        a = b;
+        b = temp;
+        data->sequence[i] = b;
+    }
+
+    return NULL;
 }
 
 /**
- * @brief Thread function that calculates a range of Fibonacci numbers
- * 
- * This function takes a range of numbers and calculates the Fibonacci number
- * for each position in that range. Results are stored in dynamically allocated memory.
- * 
- * @param args Pointer to fibonacci_args structure containing the range
- * @return void* Pointer to array of results (dynamically allocated)
+ * Calculate Fibonacci sequence using multiple threads
+ * @param n Number of elements to calculate
+ * @param sequence Array to store the sequence
+ * @return 0 on success, -1 on error
  */
-void* fibonacci_wrapper(void* args) {
-    fibonacci_args* f_args = (fibonacci_args*)args;
-    int lower_bound = f_args->lower_bound;
-    int upper_bound = f_args->upper_bound;
+int calculate_fibonacci(int n, unsigned long long *sequence) {
+    pthread_t threads[MAX_THREADS];
+    thread_data_t thread_data[MAX_THREADS];
+    int num_threads;
+    int chunk_size;
+    int result;
+    int i;
 
-    // Allocate memory for results
-    int* results = malloc(sizeof(int) * (upper_bound - lower_bound));
-    if (results == NULL) {
-        perror("malloc failed in fibonacci_wrapper");
-        free(f_args);
-        return NULL;
+    // Input validation
+    if (n <= 0 || n > MAX_SEQUENCE) {
+        fprintf(stderr, "Error: Invalid sequence length\n");
+        return -1;
     }
 
-    // Calculate Fibonacci numbers for the assigned range
-    for (int i = lower_bound; i < upper_bound; i++) {
-        results[i - lower_bound] = fibonacci(i);
+    if (sequence == NULL) {
+        fprintf(stderr, "Error: Invalid sequence array\n");
+        return -1;
     }
 
-    free(f_args);  // Free the arguments structure
-    return results;
+    // Initialize first two numbers
+    sequence[0] = 0;
+    if (n > 1) {
+        sequence[1] = 1;
+    }
+
+    if (n <= 2) {
+        return 0;
+    }
+
+    // Determine number of threads and chunk size
+    num_threads = (n < MAX_THREADS) ? n : MAX_THREADS;
+    chunk_size = (n - 2) / num_threads;
+
+    // Initialize thread data
+    for (i = 0; i < num_threads; i++) {
+        thread_data[i].start = (i * chunk_size) + 2;
+        thread_data[i].end = (i == num_threads - 1) ? n - 1 : (i + 1) * chunk_size + 1;
+        thread_data[i].sequence = sequence;
+    }
+
+    // Create threads
+    for (i = 0; i < num_threads; i++) {
+        result = pthread_create(&threads[i], NULL, fibonacci_range, &thread_data[i]);
+        if (result != 0) {
+            fprintf(stderr, "Error creating thread %d: %s\n", i, strerror(result));
+            // Cleanup created threads
+            for (int j = 0; j < i; j++) {
+                pthread_join(threads[j], NULL);
+            }
+            return -1;
+        }
+    }
+
+    // Wait for all threads to complete
+    for (i = 0; i < num_threads; i++) {
+        result = pthread_join(threads[i], NULL);
+        if (result != 0) {
+            fprintf(stderr, "Error joining thread %d: %s\n", i, strerror(result));
+        }
+    }
+
+    return 0;
 }
 
 /**
- * @brief Main function that manages thread creation and result collection
- * 
- * Creates THREADS number of threads and divides the work of calculating Fibonacci numbers
- * among them. Manages memory allocation, thread creation/joining, and cleanup.
- * 
- * @return int Exit status (0 on success, 1 on error)
+ * Main function demonstrating Fibonacci sequence calculation
+ * @return 0 on success, 1 on error
  */
 int main(void) {
-    pthread_t threads[THREADS];
-    int* results[THREADS] = {NULL};
+    int n;
+    unsigned long long sequence[MAX_SEQUENCE];
 
-    // Create threads and assign work ranges
-    for (int i = 0; i < THREADS; i++) {
-        // Allocate and initialize thread arguments
-        fibonacci_args* args = malloc(sizeof(fibonacci_args));
-        if (args == NULL) {
-            perror("malloc failed for args");
-            goto cleanup;
-        }
-
-        // Calculate range for this thread
-        args->lower_bound = i * (MAX_NUMBER / THREADS);
-        args->upper_bound = (i + 1) * (MAX_NUMBER / THREADS);
-
-        // Create thread with error checking
-        if (pthread_create(&threads[i], NULL, fibonacci_wrapper, args) != 0) {
-            perror("pthread_create failed");
-            free(args);
-            goto cleanup;
-        }
+    printf("Enter the number of Fibonacci numbers to calculate (1-%d): ", MAX_SEQUENCE);
+    if (scanf("%d", &n) != 1) {
+        fprintf(stderr, "Error: Invalid input\n");
+        return 1;
     }
 
-    // Wait for threads and process results
-    for (int i = 0; i < THREADS; i++) {
-        if (pthread_join(threads[i], (void**)&results[i]) != 0) {
-            perror("pthread_join failed");
-            goto cleanup;
-        }
-
-        // Print results if available
-        if (results[i] != NULL) {
-            for (int j = 0; j < (MAX_NUMBER / THREADS); j++) {
-                printf("Fibonacci(%d) = %d\n", 
-                       i * (MAX_NUMBER / THREADS) + j, 
-                       results[i][j]);
-            }
-        }
+    if (calculate_fibonacci(n, sequence) != 0) {
+        return 1;
     }
 
-cleanup:
-    // Clean up allocated memory
-    for (int i = 0; i < THREADS; i++) {
-        if (results[i] != NULL) {
-            free(results[i]);
-        }
+    printf("Fibonacci sequence: ");
+    for (int i = 0; i < n; i++) {
+        printf("%llu ", sequence[i]);
     }
+    printf("\n");
 
     return 0;
 }

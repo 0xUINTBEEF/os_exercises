@@ -1,11 +1,12 @@
 /**
- * TCP Client Implementation
+ * TCP Client Implementation with Enhanced Features
  * 
- * This program demonstrates a basic TCP client that:
- * - Connects to a TCP server
- * - Sends messages to the server
- * - Receives and displays server responses
- * - Handles connection errors gracefully
+ * This program demonstrates a robust TCP client implementation with:
+ * - Connection management
+ * - Error handling and logging
+ * - Resource management
+ * - User input handling
+ * - Graceful shutdown
  */
 
 #include <stdio.h>
@@ -15,71 +16,193 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
+#include <errno.h>
 
-#define SERVER_IP "127.0.0.1"
-#define PORT 8080
+// Constants
 #define BUFFER_SIZE 1024
+#define DEFAULT_PORT 8080
+#define DEFAULT_HOST "127.0.0.1"
+#define TIMEOUT_SECONDS 5
 
-int main() {
-    int sock = 0;
-    struct sockaddr_in serv_addr;
-    char buffer[BUFFER_SIZE] = {0};
-    char message[BUFFER_SIZE];
+// Global variables
+static volatile sig_atomic_t running = 1;
+static int client_socket = -1;
+
+/**
+ * Signal handler for graceful shutdown
+ * @param sig Signal number
+ */
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+/**
+ * Initialize client socket
+ * @param host Server hostname or IP address
+ * @param port Server port number
+ * @return 0 on success, -1 on error
+ */
+static int init_client(const char *host, int port) {
+    struct sockaddr_in server_addr;
+    struct timeval timeout;
 
     // Create socket
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Socket creation failed");
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0) {
+        perror("socket");
         return -1;
     }
 
-    // Configure server address
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
+    // Set socket timeout
+    timeout.tv_sec = TIMEOUT_SECONDS;
+    timeout.tv_usec = 0;
+    if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt");
+        close(client_socket);
+        return -1;
+    }
 
-    // Convert IP address from string to binary form
-    if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
-        perror("Invalid address");
+    // Initialize server address structure
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+
+    // Convert hostname to IP address
+    if (inet_pton(AF_INET, host, &server_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid address: %s\n", host);
+        close(client_socket);
         return -1;
     }
 
     // Connect to server
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Connection failed");
+    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("connect");
+        close(client_socket);
         return -1;
     }
 
-    printf("Connected to server at %s:%d\n", SERVER_IP, PORT);
+    return 0;
+}
 
-    // Communication loop
-    while (1) {
-        printf("Enter message (or 'quit' to exit): ");
-        fgets(message, BUFFER_SIZE, stdin);
-        message[strcspn(message, "\n")] = 0; // Remove newline
+/**
+ * Send data to server
+ * @param buffer Data to send
+ * @param length Length of data
+ * @return Number of bytes sent, -1 on error
+ */
+static ssize_t send_data(const char *buffer, size_t length) {
+    ssize_t total_sent = 0;
+    ssize_t bytes_sent;
 
-        if (strcmp(message, "quit") == 0) {
+    while (total_sent < (ssize_t)length) {
+        bytes_sent = send(client_socket, buffer + total_sent, length - total_sent, 0);
+        if (bytes_sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("send");
+            return -1;
+        }
+        total_sent += bytes_sent;
+    }
+
+    return total_sent;
+}
+
+/**
+ * Receive data from server
+ * @param buffer Buffer to store received data
+ * @param max_length Maximum length of buffer
+ * @return Number of bytes received, -1 on error
+ */
+static ssize_t receive_data(char *buffer, size_t max_length) {
+    ssize_t bytes_received = recv(client_socket, buffer, max_length - 1, 0);
+    if (bytes_received < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
+        perror("recv");
+        return -1;
+    }
+    buffer[bytes_received] = '\0';
+    return bytes_received;
+}
+
+/**
+ * Main function implementing TCP client
+ * @return 0 on success, 1 on error
+ */
+int main(int argc, char *argv[]) {
+    char buffer[BUFFER_SIZE];
+    const char *host = DEFAULT_HOST;
+    int port = DEFAULT_PORT;
+    ssize_t bytes_received;
+
+    // Parse command line arguments
+    if (argc > 1) {
+        host = argv[1];
+    }
+    if (argc > 2) {
+        port = atoi(argv[2]);
+    }
+
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    // Initialize client
+    if (init_client(host, port) < 0) {
+        return 1;
+    }
+
+    printf("Connected to server %s:%d\n", host, port);
+    printf("Type 'quit' to exit\n");
+
+    // Main client loop
+    while (running) {
+        printf("Enter message: ");
+        fflush(stdout);
+
+        // Read user input
+        if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) {
+            if (errno == EINTR) {
+                continue;
+            }
             break;
         }
 
-        // Send message to server
-        if (send(sock, message, strlen(message), 0) < 0) {
-            perror("Send failed");
+        // Remove newline character
+        size_t length = strlen(buffer);
+        if (length > 0 && buffer[length - 1] == '\n') {
+            buffer[length - 1] = '\0';
+        }
+
+        // Check for quit command
+        if (strcmp(buffer, "quit") == 0) {
+            break;
+        }
+
+        // Send data to server
+        if (send_data(buffer, strlen(buffer)) < 0) {
             break;
         }
 
         // Receive response from server
-        int bytes_received = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+        bytes_received = receive_data(buffer, BUFFER_SIZE);
         if (bytes_received < 0) {
-            perror("Receive failed");
             break;
-        } else if (bytes_received == 0) {
-            printf("Server disconnected\n");
-            break;
+        } else if (bytes_received > 0) {
+            printf("Server response: %s\n", buffer);
         }
-
-        buffer[bytes_received] = '\0';
-        printf("Server response: %s\n", buffer);
     }
 
-    close(sock);
+    // Cleanup
+    printf("Disconnecting from server...\n");
+    if (client_socket != -1) {
+        close(client_socket);
+    }
+
     return 0;
 } 

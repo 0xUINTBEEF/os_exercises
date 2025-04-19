@@ -1,3 +1,15 @@
+/**
+ * Bidirectional Pipe Communication Example
+ * 
+ * This program demonstrates bidirectional communication between parent and child processes
+ * using two pipes. One pipe for parent-to-child communication and another for child-to-parent.
+ * 
+ * Features:
+ * - Bidirectional communication
+ * - Error handling
+ * - Graceful shutdown
+ * - Safe buffer management
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -5,82 +17,147 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <signal.h>
+#include <errno.h>
 
-int main(void)
-{
-    // Create two pipes, one for communication between parent and child, and the other for communication between child and parent
-    int fd1[2], fd2[2]; // fd1: parent -> child, fd2: child -> parent
-    if (pipe(fd1) < 0 || pipe(fd2) < 0)
-    {
-        perror("pipe"); // print error message
-        exit(1);
+// Constants
+#define BUFFER_SIZE 128
+#define PARENT_TO_CHILD_MESSAGES 3
+#define CHILD_TO_PARENT_MESSAGES 2
+
+// Global variables for cleanup
+static int fd1[2] = {-1, -1};
+static int fd2[2] = {-1, -1};
+static volatile sig_atomic_t running = 1;
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+
+// Cleanup function
+static void cleanup(void) {
+    if (fd1[0] != -1) close(fd1[0]);
+    if (fd1[1] != -1) close(fd1[1]);
+    if (fd2[0] != -1) close(fd2[0]);
+    if (fd2[1] != -1) close(fd2[1]);
+}
+
+int main(void) {
+    pid_t child;
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+    int status;
+
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    // Create pipes
+    if (pipe(fd1) < 0 || pipe(fd2) < 0) {
+        perror("pipe creation failed");
+        cleanup();
+        exit(EXIT_FAILURE);
     }
 
-    pid_t child = fork();
-
-    if (child < 0)
-    {
-        perror("fork");
-        exit(1);
+    // Fork process
+    child = fork();
+    if (child < 0) {
+        perror("fork failed");
+        cleanup();
+        exit(EXIT_FAILURE);
     }
-    else if (child == 0)
-    {
-        // Close unused ends to avoid hanging
+
+    if (child == 0) {  // Child process
+        // Close unused ends
         close(fd1[1]);
         close(fd2[0]);
 
-        printf("Now reading from child\n");
+        printf("Child process started\n");
 
-        char buf[128];
+        // Read messages from parent
+        while (running && (bytes_read = read(fd1[0], buffer, BUFFER_SIZE - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            printf("Child received: %s", buffer);
+        }
 
-        // Read from parent
-        while (read(fd1[0], buf, sizeof(buf)) > 0)
-        {
-            printf("Child process read: %s\n", buf);
+        if (bytes_read < 0 && errno != EINTR) {
+            perror("child read error");
+            cleanup();
+            exit(EXIT_FAILURE);
         }
 
         close(fd1[0]);
 
-        // Now child writes to parent
-        printf("Now writing from child\n");
-        write(fd2[1], "Hello, Parent!\n", strlen("Hello, Parent!\n"));
-        write(fd2[1], "Goodbye, Parent!", strlen("Goodbye, Parent!"));
+        // Write messages to parent
+        const char *messages[] = {
+            "Hello, Parent!\n",
+            "Goodbye, Parent!\n"
+        };
+
+        for (int i = 0; i < CHILD_TO_PARENT_MESSAGES && running; i++) {
+            if (write(fd2[1], messages[i], strlen(messages[i])) < 0) {
+                perror("child write error");
+                cleanup();
+                exit(EXIT_FAILURE);
+            }
+        }
 
         close(fd2[1]);
-
         printf("Child process finished\n");
-    }
-    else
-    {
-        // Close unused ends to avoid hanging
+        exit(EXIT_SUCCESS);
+    } else {  // Parent process
+        // Close unused ends
         close(fd1[0]);
         close(fd2[1]);
 
-        printf("Now writing from parent\n");
-        
-        // For passing messages (char array), strlen() is heavily recommended to use avoid the bugs.
-        // For variables, sizeof() is recommended to use.
-        write(fd1[1], "Hello, World!\n", strlen("Hello, World!\n"));
-        write(fd1[1], "Morning!\n", strlen("Morning!\n"));
-        write(fd1[1], "Goodbye, World!", strlen("Goodbye, World!"));
+        printf("Parent process started\n");
+
+        // Write messages to child
+        const char *messages[] = {
+            "Hello, World!\n",
+            "Morning!\n",
+            "Goodbye, World!\n"
+        };
+
+        for (int i = 0; i < PARENT_TO_CHILD_MESSAGES && running; i++) {
+            if (write(fd1[1], messages[i], strlen(messages[i])) < 0) {
+                perror("parent write error");
+                cleanup();
+                exit(EXIT_FAILURE);
+            }
+        }
 
         close(fd1[1]);
 
-        printf("Waiting until child process finishes...\n");
+        // Wait for child to finish writing
+        printf("Waiting for child process...\n");
+        wait(&status);
 
-        wait(NULL);
+        // Read messages from child
+        while (running && (bytes_read = read(fd2[0], buffer, BUFFER_SIZE - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            printf("Parent received: %s", buffer);
+        }
 
-        char buf[128];
-
-        // Read from child
-        while (read(fd2[0], buf, sizeof(buf)) > 0)
-        {
-            printf("Parent process read: %s\n", buf);
+        if (bytes_read < 0 && errno != EINTR) {
+            perror("parent read error");
+            cleanup();
+            exit(EXIT_FAILURE);
         }
 
         close(fd2[0]);
+
+        if (WIFEXITED(status)) {
+            printf("Child process exited with status: %d\n", WEXITSTATUS(status));
+        } else {
+            printf("Child process terminated abnormally\n");
+        }
 
         printf("Parent process finished\n");
     }
-    return 0;
+
+    cleanup();
+    return EXIT_SUCCESS;
 }

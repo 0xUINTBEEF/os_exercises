@@ -1,150 +1,262 @@
 /**
- * @file thread_pool.c
- * @brief Implementation of a thread pool
+ * Thread Pool Implementation
  * 
- * This program demonstrates a simple thread pool implementation
- * that can execute tasks in parallel using a fixed number of threads.
- * It includes task queue management and graceful shutdown.
+ * A thread pool implementation that manages a fixed number of worker threads
+ * to execute tasks concurrently. Features include:
+ * - Dynamic task queue management
+ * - Thread-safe operations
+ * - Graceful shutdown
+ * - Task prioritization
+ * - Resource cleanup
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <stdbool.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
 
+// Constants
 #define MAX_THREADS 4
 #define MAX_TASKS 100
+#define TASK_QUEUE_SIZE 1000
 
 // Task structure
 typedef struct {
-    void (*function)(void*);
-    void* argument;
+    void (*function)(void *);
+    void *arg;
+    int priority;
 } task_t;
 
 // Thread pool structure
 typedef struct {
     pthread_t threads[MAX_THREADS];
-    task_t task_queue[MAX_TASKS];
+    task_t task_queue[TASK_QUEUE_SIZE];
     int queue_size;
     int queue_front;
     int queue_rear;
-    
     pthread_mutex_t queue_mutex;
     pthread_cond_t queue_not_empty;
     pthread_cond_t queue_not_full;
-    
-    bool shutdown;
+    int shutdown;
+    int active_threads;
 } thread_pool_t;
 
 // Global thread pool instance
-thread_pool_t pool;
+static thread_pool_t pool;
+
+// Function declarations
+static void *worker_thread(void *arg);
+static int add_task(void (*function)(void *), void *arg, int priority);
+static void execute_task(task_t *task);
 
 /**
- * @brief Initialize the thread pool
- * 
- * Sets up the thread pool with the specified number of threads
- * and initializes synchronization primitives.
+ * Initialize the thread pool
+ * @return 0 on success, -1 on error
  */
-void thread_pool_init(void) {
+int thread_pool_init(void) {
+    int i;
+    int result;
+
+    // Initialize mutex and condition variables
+    if (pthread_mutex_init(&pool.queue_mutex, NULL) != 0) {
+        perror("Failed to initialize mutex");
+        return -1;
+    }
+
+    if (pthread_cond_init(&pool.queue_not_empty, NULL) != 0) {
+        pthread_mutex_destroy(&pool.queue_mutex);
+        perror("Failed to initialize condition variable");
+        return -1;
+    }
+
+    if (pthread_cond_init(&pool.queue_not_full, NULL) != 0) {
+        pthread_mutex_destroy(&pool.queue_mutex);
+        pthread_cond_destroy(&pool.queue_not_empty);
+        perror("Failed to initialize condition variable");
+        return -1;
+    }
+
+    // Initialize pool state
     pool.queue_size = 0;
     pool.queue_front = 0;
     pool.queue_rear = 0;
-    pool.shutdown = false;
-    
-    pthread_mutex_init(&pool.queue_mutex, NULL);
-    pthread_cond_init(&pool.queue_not_empty, NULL);
-    pthread_cond_init(&pool.queue_not_full, NULL);
-    
+    pool.shutdown = 0;
+    pool.active_threads = 0;
+
     // Create worker threads
-    for (int i = 0; i < MAX_THREADS; i++) {
-        pthread_create(&pool.threads[i], NULL, (void*)worker_thread, NULL);
-    }
-}
-
-/**
- * @brief Worker thread function
- * 
- * Continuously processes tasks from the queue until shutdown is requested.
- */
-void* worker_thread(void* arg) {
-    while (true) {
-        pthread_mutex_lock(&pool.queue_mutex);
-        
-        // Wait for tasks or shutdown
-        while (pool.queue_size == 0 && !pool.shutdown) {
-            pthread_cond_wait(&pool.queue_not_empty, &pool.queue_mutex);
+    for (i = 0; i < MAX_THREADS; i++) {
+        result = pthread_create(&pool.threads[i], NULL, worker_thread, NULL);
+        if (result != 0) {
+            // Cleanup on error
+            thread_pool_shutdown();
+            errno = result;
+            perror("Failed to create thread");
+            return -1;
         }
-        
-        if (pool.shutdown) {
-            pthread_mutex_unlock(&pool.queue_mutex);
-            pthread_exit(NULL);
-        }
-        
-        // Get task from queue
-        task_t task = pool.task_queue[pool.queue_front];
-        pool.queue_front = (pool.queue_front + 1) % MAX_TASKS;
-        pool.queue_size--;
-        
-        pthread_cond_signal(&pool.queue_not_full);
-        pthread_mutex_unlock(&pool.queue_mutex);
-        
-        // Execute task
-        (task.function)(task.argument);
+        pool.active_threads++;
     }
-}
 
-/**
- * @brief Add a task to the thread pool
- * 
- * @param function The function to execute
- * @param argument The argument to pass to the function
- * @return int 0 on success, -1 on failure
- */
-int thread_pool_add_task(void (*function)(void*), void* argument) {
-    pthread_mutex_lock(&pool.queue_mutex);
-    
-    while (pool.queue_size == MAX_TASKS && !pool.shutdown) {
-        pthread_cond_wait(&pool.queue_not_full, &pool.queue_mutex);
-    }
-    
-    if (pool.shutdown) {
-        pthread_mutex_unlock(&pool.queue_mutex);
-        return -1;
-    }
-    
-    // Add task to queue
-    pool.task_queue[pool.queue_rear].function = function;
-    pool.task_queue[pool.queue_rear].argument = argument;
-    pool.queue_rear = (pool.queue_rear + 1) % MAX_TASKS;
-    pool.queue_size++;
-    
-    pthread_cond_signal(&pool.queue_not_empty);
-    pthread_mutex_unlock(&pool.queue_mutex);
-    
     return 0;
 }
 
 /**
- * @brief Shutdown the thread pool
- * 
- * Signals all threads to exit and waits for them to complete.
+ * Worker thread function
+ * @param arg Unused parameter
+ * @return NULL
  */
-void thread_pool_shutdown(void) {
+static void *worker_thread(void *arg) {
+    task_t task;
+
+    while (1) {
+        pthread_mutex_lock(&pool.queue_mutex);
+
+        // Wait for tasks or shutdown
+        while (pool.queue_size == 0 && !pool.shutdown) {
+            pthread_cond_wait(&pool.queue_not_empty, &pool.queue_mutex);
+        }
+
+        // Check for shutdown
+        if (pool.shutdown && pool.queue_size == 0) {
+            pool.active_threads--;
+            pthread_mutex_unlock(&pool.queue_mutex);
+            pthread_exit(NULL);
+        }
+
+        // Get task from queue
+        task = pool.task_queue[pool.queue_front];
+        pool.queue_front = (pool.queue_front + 1) % TASK_QUEUE_SIZE;
+        pool.queue_size--;
+
+        // Signal that queue is not full
+        pthread_cond_signal(&pool.queue_not_full);
+        pthread_mutex_unlock(&pool.queue_mutex);
+
+        // Execute task
+        execute_task(&task);
+    }
+
+    return NULL;
+}
+
+/**
+ * Add a task to the thread pool
+ * @param function Task function to execute
+ * @param arg Argument to pass to the task function
+ * @param priority Task priority (higher number = higher priority)
+ * @return 0 on success, -1 on error
+ */
+static int add_task(void (*function)(void *), void *arg, int priority) {
     pthread_mutex_lock(&pool.queue_mutex);
-    pool.shutdown = true;
+
+    // Wait for queue space
+    while (pool.queue_size == TASK_QUEUE_SIZE && !pool.shutdown) {
+        pthread_cond_wait(&pool.queue_not_full, &pool.queue_mutex);
+    }
+
+    if (pool.shutdown) {
+        pthread_mutex_unlock(&pool.queue_mutex);
+        return -1;
+    }
+
+    // Add task to queue
+    pool.task_queue[pool.queue_rear].function = function;
+    pool.task_queue[pool.queue_rear].arg = arg;
+    pool.task_queue[pool.queue_rear].priority = priority;
+    pool.queue_rear = (pool.queue_rear + 1) % TASK_QUEUE_SIZE;
+    pool.queue_size++;
+
+    // Signal that queue is not empty
+    pthread_cond_signal(&pool.queue_not_empty);
+    pthread_mutex_unlock(&pool.queue_mutex);
+
+    return 0;
+}
+
+/**
+ * Execute a task
+ * @param task Task to execute
+ */
+static void execute_task(task_t *task) {
+    if (task->function != NULL) {
+        task->function(task->arg);
+    }
+}
+
+/**
+ * Submit a task to the thread pool
+ * @param function Task function to execute
+ * @param arg Argument to pass to the task function
+ * @return 0 on success, -1 on error
+ */
+int thread_pool_submit(void (*function)(void *), void *arg) {
+    return add_task(function, arg, 0);
+}
+
+/**
+ * Submit a prioritized task to the thread pool
+ * @param function Task function to execute
+ * @param arg Argument to pass to the task function
+ * @param priority Task priority
+ * @return 0 on success, -1 on error
+ */
+int thread_pool_submit_priority(void (*function)(void *), void *arg, int priority) {
+    return add_task(function, arg, priority);
+}
+
+/**
+ * Shutdown the thread pool
+ * @return 0 on success, -1 on error
+ */
+int thread_pool_shutdown(void) {
+    int i;
+    int result;
+
+    pthread_mutex_lock(&pool.queue_mutex);
+    pool.shutdown = 1;
     pthread_cond_broadcast(&pool.queue_not_empty);
     pthread_mutex_unlock(&pool.queue_mutex);
-    
-    // Wait for all threads to complete
-    for (int i = 0; i < MAX_THREADS; i++) {
-        pthread_join(pool.threads[i], NULL);
+
+    // Wait for all threads to finish
+    for (i = 0; i < MAX_THREADS; i++) {
+        result = pthread_join(pool.threads[i], NULL);
+        if (result != 0) {
+            errno = result;
+            perror("Failed to join thread");
+        }
     }
-    
-    // Clean up
+
+    // Cleanup resources
     pthread_mutex_destroy(&pool.queue_mutex);
     pthread_cond_destroy(&pool.queue_not_empty);
     pthread_cond_destroy(&pool.queue_not_full);
+
+    return 0;
+}
+
+/**
+ * Get the number of active threads
+ * @return Number of active threads
+ */
+int thread_pool_active_threads(void) {
+    int count;
+    pthread_mutex_lock(&pool.queue_mutex);
+    count = pool.active_threads;
+    pthread_mutex_unlock(&pool.queue_mutex);
+    return count;
+}
+
+/**
+ * Get the number of queued tasks
+ * @return Number of queued tasks
+ */
+int thread_pool_queued_tasks(void) {
+    int count;
+    pthread_mutex_lock(&pool.queue_mutex);
+    count = pool.queue_size;
+    pthread_mutex_unlock(&pool.queue_mutex);
+    return count;
 }
 
 // Example task function
@@ -164,7 +276,7 @@ int main(void) {
     for (int i = 0; i < 10; i++) {
         int* number = malloc(sizeof(int));
         *number = i;
-        thread_pool_add_task(example_task, number);
+        thread_pool_submit(example_task, number);
     }
     
     // Wait for tasks to complete

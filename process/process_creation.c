@@ -1,16 +1,37 @@
 /**
- * @file process_creation.c
- * @brief Demonstration of process creation using fork()
+ * Process Creation Demonstration
  * 
  * This program demonstrates the creation of child and grandchild processes
  * using the fork() system call. It shows how process IDs are inherited
  * and how the process hierarchy works in Unix-like systems.
+ * 
+ * Features:
+ * - Process hierarchy creation
+ * - PID inheritance demonstration
+ * - Error handling
+ * - Resource cleanup
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <signal.h>
+
+// Constants
+#define CHILD_SLEEP_TIME 2
+#define GRANDCHILD_SLEEP_TIME 1
+
+// Global variables for cleanup
+static volatile sig_atomic_t running = 1;
+
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
 
 /**
  * @brief Main function demonstrating process creation
@@ -22,52 +43,81 @@
  */
 int main(void)
 {
-    printf("Enter of the program\n");
-    printf("Before fork\n");
+    // Set up signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    printf("Main process (PID: %d, PPID: %d) starting...\n", 
+           getpid(), getppid());
     
-    // Create a child process
-    pid_t child_process = fork();
-    printf("After fork\n");
-
-    printf("Child Process ID: %d\n", child_process);
-
-    if (child_process < 0)
-    {
-        // Error handling for fork failure
-        printf("Error: Fork failed\n");
+    // Create child process
+    pid_t child_pid = fork();
+    if (child_pid < 0) {
+        perror("fork failed");
+        return EXIT_FAILURE;
     }
-    else if (child_process == 0)
-    {
-        // Code executed by child process
-        printf("Child Process\n");
+
+    if (child_pid == 0) {
+        // Child process
+        printf("Child process (PID: %d, PPID: %d) created\n", 
+               getpid(), getppid());
         
-        // Create a grandchild process
-        pid_t grand_child_process = fork();
-        printf("After fork of fork\n");
-        printf("Grand Child Process ID: %d\n", grand_child_process);
+        // Create grandchild process
+        pid_t grandchild_pid = fork();
+        if (grandchild_pid < 0) {
+            perror("fork failed in child");
+            return EXIT_FAILURE;
+        }
 
-        if (grand_child_process < 0)
-        {
-            // Error handling for fork failure in child
-            printf("Error: Fork failed in child process\n");
+        if (grandchild_pid == 0) {
+            // Grandchild process
+            printf("Grandchild process (PID: %d, PPID: %d) created\n", 
+                   getpid(), getppid());
+            sleep(GRANDCHILD_SLEEP_TIME);
+            printf("Grandchild process terminating\n");
+            return EXIT_SUCCESS;
+        } else {
+            // Child process continues
+            printf("Child process created grandchild with PID: %d\n", 
+                   grandchild_pid);
+            
+            // Wait for grandchild
+            int status;
+            pid_t waited_pid = waitpid(grandchild_pid, &status, 0);
+            
+            if (waited_pid == -1) {
+                perror("waitpid failed in child");
+                return EXIT_FAILURE;
+            }
+            
+            if (WIFEXITED(status)) {
+                printf("Grandchild process %d exited with status %d\n", 
+                       waited_pid, WEXITSTATUS(status));
+            }
+            
+            sleep(CHILD_SLEEP_TIME);
+            printf("Child process terminating\n");
+            return EXIT_SUCCESS;
         }
-        else if (grand_child_process == 0)
-        {
-            // Code executed by grandchild process
-            printf("Grand Child Process\n");
+    } else {
+        // Parent process
+        printf("Main process created child with PID: %d\n", child_pid);
+        
+        // Wait for child
+        int status;
+        pid_t waited_pid = waitpid(child_pid, &status, 0);
+        
+        if (waited_pid == -1) {
+            perror("waitpid failed in parent");
+            return EXIT_FAILURE;
         }
-        else
-        {
-            // Code executed by child process after creating grandchild
-            printf("Child Process (after creating grandchild)\n");
+        
+        if (WIFEXITED(status)) {
+            printf("Child process %d exited with status %d\n", 
+                   waited_pid, WEXITSTATUS(status));
         }
     }
-    else
-    {
-        // Code executed by parent process
-        printf("Parent Process\n");
-    }
-    
-    printf("End of the program\n");
-    return 0;
+
+    printf("Main process terminating\n");
+    return EXIT_SUCCESS;
 }

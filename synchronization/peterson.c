@@ -1,168 +1,125 @@
 /**
- * @file peterson.c
- * @brief Implementation of Peterson's Algorithm for mutual exclusion
+ * Peterson's Algorithm Implementation
  * 
- * This program demonstrates Peterson's solution to the mutual exclusion problem
- * between two threads. It includes proper synchronization mechanisms and graceful
- * shutdown handling.
+ * This program demonstrates Peterson's algorithm for mutual exclusion
+ * between two processes. It provides a software-based solution to the
+ * critical section problem without requiring special hardware support.
  * 
- * Peterson's algorithm ensures mutual exclusion without requiring hardware atomic
- * instructions, though it relies on the memory model providing sequential consistency.
+ * Features:
+ * - Mutual exclusion
+ * - Progress
+ * - Bounded waiting
+ * - Error handling
+ * - Graceful shutdown
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <stdbool.h>
 #include <unistd.h>
+#include <time.h>
+#include <errno.h>
+#include <string.h>
 #include <signal.h>
 
-/** Maximum number of iterations each thread will perform */
-#define MAX_ITERATIONS 10
+// Constants
+#define NUM_PROCESSES 2
+#define CRITICAL_SECTION_TIME 2
+#define NON_CRITICAL_SECTION_TIME 3
+#define MAX_ITERATIONS 5
 
-// Shared variables for Peterson's algorithm
-volatile int turn;           /**< Indicates whose turn it is to enter critical section */
-volatile bool flag[2];       /**< Indicates if a thread wants to enter critical section */
-volatile bool running = true;/**< Control flag for graceful shutdown */
+// Peterson's algorithm variables
+static int flag[NUM_PROCESSES] = {0, 0};
+static int turn = 0;
+static volatile sig_atomic_t running = 1;
 
-// Test variable for demonstrating mutual exclusion
-volatile int shared_counter = 0;
+// Signal handler for graceful shutdown
+static void signal_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
 
-/**
- * @brief Signal handler for graceful shutdown
- * 
- * Handles SIGINT (Ctrl+C) by setting the running flag to false,
- * allowing threads to complete their current iteration and exit.
- * 
- * @param signum The signal number received
- */
-void signal_handler(int signum) {
-    if (signum == SIGINT) {
-        printf("\nShutting down gracefully...\n");
-        running = false;
+// Enter critical section using Peterson's algorithm
+static void enter_critical_section(int process_id) {
+    int other = 1 - process_id;
+    
+    // Set flag to indicate interest
+    flag[process_id] = 1;
+    
+    // Give turn to other process
+    turn = other;
+    
+    // Wait while other process is in critical section
+    while (flag[other] && turn == other && running) {
+        // Busy wait
     }
 }
 
-/**
- * @brief Thread 0's entry point function
- * 
- * Implements Peterson's algorithm for thread 0. The thread attempts to enter
- * its critical section MAX_ITERATIONS times, unless interrupted.
- * 
- * @param args Thread arguments (unused)
- * @return void* Always returns NULL
- */
-void* thread_0(void* args) {
+// Exit critical section
+static void exit_critical_section(int process_id) {
+    flag[process_id] = 0;
+}
+
+// Process thread function
+static void *process_thread(void *arg) {
+    int process_id = *(int *)arg;
+    free(arg);
     int iterations = 0;
+    
+    printf("Process %d starting\n", process_id);
+    
     while (running && iterations < MAX_ITERATIONS) {
-        // Entry section
-        flag[0] = true;
-        turn = 1;
-        while (flag[1] && turn == 1 && running) {
-            // Busy wait with small sleep to reduce CPU usage
-            usleep(1);
-        }
-
-        if (!running) break;
-
-        // Critical section
-        printf("Thread 0 entering critical section (counter: %d)\n", shared_counter);
-        shared_counter++;
-        usleep(100000); // Simulate some work
-        printf("Thread 0 leaving critical section (counter: %d)\n", shared_counter);
-
-        // Exit section
-        flag[0] = false;
-        iterations++;
+        // Non-critical section
+        printf("Process %d in non-critical section\n", process_id);
+        sleep(NON_CRITICAL_SECTION_TIME);
         
-        // Remainder section
-        usleep(50000); // Some non-critical work
+        // Enter critical section
+        enter_critical_section(process_id);
+        if (!running) break;
+        
+        // Critical section
+        printf("Process %d entered critical section\n", process_id);
+        sleep(CRITICAL_SECTION_TIME);
+        printf("Process %d completed critical section\n", process_id);
+        
+        // Exit critical section
+        exit_critical_section(process_id);
+        iterations++;
     }
+    
+    printf("Process %d completed all iterations\n", process_id);
     return NULL;
 }
 
-/**
- * @brief Thread 1's entry point function
- * 
- * Implements Peterson's algorithm for thread 1. The thread attempts to enter
- * its critical section MAX_ITERATIONS times, unless interrupted.
- * 
- * @param args Thread arguments (unused)
- * @return void* Always returns NULL
- */
-void* thread_1(void* args) {
-    int iterations = 0;
-    while (running && iterations < MAX_ITERATIONS) {
-        // Entry section
-        flag[1] = true;
-        turn = 0;
-        while (flag[0] && turn == 0 && running) {
-            // Busy wait with small sleep to reduce CPU usage
-            usleep(1);
-        }
-
-        if (!running) break;
-
-        // Critical section
-        printf("Thread 1 entering critical section (counter: %d)\n", shared_counter);
-        shared_counter++;
-        usleep(100000); // Simulate some work
-        printf("Thread 1 leaving critical section (counter: %d)\n", shared_counter);
-
-        // Exit section
-        flag[1] = false;
-        iterations++;
-        
-        // Remainder section
-        usleep(50000); // Some non-critical work
-    }
-    return NULL;
-}
-
-/**
- * @brief Main function that sets up and manages the threads
- * 
- * Initializes the shared variables, sets up signal handling, creates the threads,
- * and waits for their completion. Also verifies the final counter value.
- * 
- * @return int Exit status (0 on success, 1 on error)
- */
 int main(void) {
-    pthread_t t0, t1;
-
-    // Set up signal handler for Ctrl+C
+    // Set up signal handler
     signal(SIGINT, signal_handler);
-
-    // Initialize shared variables
-    turn = 0;
-    flag[0] = false;
-    flag[1] = false;
-    shared_counter = 0;
-
-    // Create threads
-    if (pthread_create(&t0, NULL, thread_0, NULL) != 0) {
-        perror("Failed to create thread 0");
-        return 1;
+    signal(SIGTERM, signal_handler);
+    
+    // Create process threads
+    pthread_t threads[NUM_PROCESSES];
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        int *process_id = malloc(sizeof(int));
+        if (!process_id) {
+            perror("malloc failed");
+            return EXIT_FAILURE;
+        }
+        *process_id = i;
+        
+        if (pthread_create(&threads[i], NULL, process_thread, process_id) != 0) {
+            perror("pthread_create failed");
+            free(process_id);
+            return EXIT_FAILURE;
+        }
     }
-
-    if (pthread_create(&t1, NULL, thread_1, NULL) != 0) {
-        perror("Failed to create thread 1");
-        pthread_cancel(t0);
-        return 1;
+    
+    // Wait for all threads to complete
+    for (int i = 0; i < NUM_PROCESSES; i++) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            perror("pthread_join failed");
+        }
     }
-
-    // Wait for threads to finish
-    if (pthread_join(t0, NULL) != 0) {
-        perror("Failed to join thread 0");
-    }
-
-    if (pthread_join(t1, NULL) != 0) {
-        perror("Failed to join thread 1");
-    }
-
-    // Verify results
-    printf("\nFinal counter value: %d\n", shared_counter);
-    printf("Expected counter value: %d\n", MAX_ITERATIONS * 2);
-
-    return 0;
+    
+    printf("All processes have completed their iterations\n");
+    return EXIT_SUCCESS;
 }

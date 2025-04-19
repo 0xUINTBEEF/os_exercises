@@ -1,207 +1,245 @@
 /**
- * @file thread_scheduler.c
- * @brief Thread scheduling visualization implementation
+ * Thread Scheduling Visualization using POSIX Threads and ncurses
  * 
- * This program demonstrates thread scheduling visualization
- * with real-time display of thread states and priority-based
- * scheduling.
+ * This program demonstrates thread scheduling with real-time visualization
+ * using POSIX threads and ncurses library. Features include:
+ * - Real-time display of thread states
+ * - Priority-based scheduling
+ * - Thread state tracking
+ * - Performance monitoring
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <time.h>
 #include <ncurses.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <unistd.h>
 
-#define NUM_THREADS 5
-#define MAX_PRIORITY 10
-#define SCHEDULING_INTERVAL 1
+// Constants
+#define MAX_THREADS 5
+#define MAX_ITERATIONS 1000000
+#define PRIORITY_LEVELS 5
+#define REFRESH_RATE 100000  // microseconds
 
+// Thread states
 typedef enum {
     READY,
     RUNNING,
     BLOCKED,
     TERMINATED
-} ThreadState;
+} thread_state_t;
 
+// Structure to hold thread information
 typedef struct {
-    pthread_t tid;
     int id;
     int priority;
-    ThreadState state;
-    int cpu_time;
-    int total_time;
-    pthread_mutex_t mutex;
-} ThreadInfo;
+    thread_state_t state;
+    unsigned long long cpu_time;
+    unsigned long long total_time;
+    struct timespec start_time;
+    struct timespec end_time;
+} thread_info_t;
 
-ThreadInfo threads[NUM_THREADS];
-pthread_mutex_t display_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Global variables
+static pthread_mutex_t scheduler_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t scheduler_cond = PTHREAD_COND_INITIALIZER;
+static thread_info_t thread_info[MAX_THREADS];
+static int running_thread = -1;
+static int should_exit = 0;
 
 /**
- * @brief Initialize thread information
+ * Initialize thread information
  */
-void init_threads(void) {
-    for (int i = 0; i < NUM_THREADS; i++) {
-        threads[i].id = i;
-        threads[i].priority = rand() % MAX_PRIORITY + 1;
-        threads[i].state = READY;
-        threads[i].cpu_time = 0;
-        threads[i].total_time = 0;
-        pthread_mutex_init(&threads[i].mutex, NULL);
+static void init_threads(void) {
+    for (int i = 0; i < MAX_THREADS; i++) {
+        thread_info[i].id = i;
+        thread_info[i].priority = (i % PRIORITY_LEVELS) + 1;
+        thread_info[i].state = READY;
+        thread_info[i].cpu_time = 0;
+        thread_info[i].total_time = 0;
     }
 }
 
 /**
- * @brief Display thread states
+ * Display thread states and information
  */
-void display_threads(void) {
-    pthread_mutex_lock(&display_mutex);
-    
+static void display_threads(void) {
     clear();
-    printw("Thread Scheduling Visualization\n");
-    printw("==============================\n\n");
-    
-    for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_mutex_lock(&threads[i].mutex);
-        
-        printw("Thread %d:\n", threads[i].id);
-        printw("  Priority: %d\n", threads[i].priority);
-        printw("  State: ");
-        switch (threads[i].state) {
-            case READY: printw("READY"); break;
-            case RUNNING: printw("RUNNING"); break;
-            case BLOCKED: printw("BLOCKED"); break;
-            case TERMINATED: printw("TERMINATED"); break;
+    mvprintw(0, 0, "Thread Scheduler Visualization");
+    mvprintw(1, 0, "Press 'q' to quit");
+    mvprintw(3, 0, "Thread ID  Priority  State      CPU Time    Total Time");
+    mvprintw(4, 0, "------------------------------------------------------");
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        const char *state_str;
+        switch (thread_info[i].state) {
+            case READY: state_str = "READY"; break;
+            case RUNNING: state_str = "RUNNING"; break;
+            case BLOCKED: state_str = "BLOCKED"; break;
+            case TERMINATED: state_str = "TERMINATED"; break;
+            default: state_str = "UNKNOWN"; break;
         }
-        printw("\n");
-        printw("  CPU Time: %d\n", threads[i].cpu_time);
-        printw("  Total Time: %d\n", threads[i].total_time);
-        printw("\n");
-        
-        pthread_mutex_unlock(&threads[i].mutex);
+
+        mvprintw(5 + i, 0, "%-9d %-9d %-10s %-11llu %-11llu",
+                thread_info[i].id,
+                thread_info[i].priority,
+                state_str,
+                thread_info[i].cpu_time,
+                thread_info[i].total_time);
     }
-    
+
     refresh();
-    pthread_mutex_unlock(&display_mutex);
 }
 
 /**
- * @brief Thread function
+ * Thread function that performs work based on priority
+ * @param arg Thread information structure
+ * @return NULL
  */
-void* thread_function(void* arg) {
-    ThreadInfo* info = (ThreadInfo*)arg;
-    
-    while (info->state != TERMINATED) {
-        pthread_mutex_lock(&info->mutex);
+static void *thread_function(void *arg) {
+    thread_info_t *info = (thread_info_t *)arg;
+    struct timespec start, end;
+    double dummy = 0.0;
+
+    while (!should_exit) {
+        pthread_mutex_lock(&scheduler_mutex);
         
-        if (info->state == RUNNING) {
-            info->cpu_time++;
-            info->total_time++;
-            
-            // Simulate work
-            usleep(100000);
-            
-            // Random state change
-            if (rand() % 10 == 0) {
-                info->state = BLOCKED;
-            }
-        } else if (info->state == BLOCKED) {
-            info->total_time++;
-            
-            // Simulate I/O
-            usleep(200000);
-            
-            // Return to ready state
-            info->state = READY;
+        // Wait until this thread is selected to run
+        while (running_thread != info->id && !should_exit) {
+            pthread_cond_wait(&scheduler_cond, &scheduler_mutex);
         }
+
+        if (should_exit) {
+            pthread_mutex_unlock(&scheduler_mutex);
+            break;
+        }
+
+        // Update thread state
+        info->state = RUNNING;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+
+        pthread_mutex_unlock(&scheduler_mutex);
+
+        // Perform work
+        for (int i = 0; i < info->priority * 1000; i++) {
+            dummy += (double)i / (i + 1);
+        }
+
+        pthread_mutex_lock(&scheduler_mutex);
         
-        pthread_mutex_unlock(&info->mutex);
-        usleep(10000); // Prevent CPU hogging
+        // Update timing information
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        info->cpu_time += (end.tv_sec - start.tv_sec) * 1000000000 + 
+                         (end.tv_nsec - start.tv_nsec);
+        info->total_time = info->cpu_time;
+        
+        // Change state back to ready
+        info->state = READY;
+        running_thread = -1;
+        
+        pthread_cond_broadcast(&scheduler_cond);
+        pthread_mutex_unlock(&scheduler_mutex);
     }
-    
+
     return NULL;
 }
 
 /**
- * @brief Scheduler function
+ * Scheduler function that selects the next thread to run
  */
-void* scheduler_function(void* arg) {
-    (void)arg;
+static void *scheduler_function(void *arg) {
+    (void)arg;  // Unused parameter
     
-    while (1) {
+    while (!should_exit) {
+        pthread_mutex_lock(&scheduler_mutex);
+        
         // Find highest priority ready thread
-        int highest_priority = 0;
+        int highest_priority = -1;
         int selected_thread = -1;
         
-        for (int i = 0; i < NUM_THREADS; i++) {
-            pthread_mutex_lock(&threads[i].mutex);
-            
-            if (threads[i].state == READY && 
-                threads[i].priority > highest_priority) {
-                highest_priority = threads[i].priority;
+        for (int i = 0; i < MAX_THREADS; i++) {
+            if (thread_info[i].state == READY && 
+                thread_info[i].priority > highest_priority) {
+                highest_priority = thread_info[i].priority;
                 selected_thread = i;
             }
-            
-            pthread_mutex_unlock(&threads[i].mutex);
         }
         
-        // Schedule selected thread
         if (selected_thread != -1) {
-            pthread_mutex_lock(&threads[selected_thread].mutex);
-            threads[selected_thread].state = RUNNING;
-            pthread_mutex_unlock(&threads[selected_thread].mutex);
+            running_thread = selected_thread;
+            pthread_cond_broadcast(&scheduler_cond);
         }
         
-        // Display current state
-        display_threads();
-        
-        // Sleep for scheduling interval
-        sleep(SCHEDULING_INTERVAL);
+        pthread_mutex_unlock(&scheduler_mutex);
+        usleep(REFRESH_RATE);
     }
     
     return NULL;
 }
 
+/**
+ * Main function demonstrating thread scheduling visualization
+ * @return 0 on success, 1 on error
+ */
 int main(void) {
+    pthread_t threads[MAX_THREADS];
     pthread_t scheduler_thread;
-    
+    int result;
+    int ch;
+
     // Initialize ncurses
     initscr();
     cbreak();
     noecho();
-    curs_set(0);
-    
-    // Initialize random number generator
-    srand(time(NULL));
-    
-    // Initialize threads
+    nodelay(stdscr, TRUE);
+    keypad(stdscr, TRUE);
+
+    // Initialize thread information
     init_threads();
-    
-    // Create threads
-    for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_create(&threads[i].tid, NULL, thread_function, &threads[i]);
-    }
-    
+
     // Create scheduler thread
-    pthread_create(&scheduler_thread, NULL, scheduler_function, NULL);
-    
-    // Wait for user input to exit
-    getch();
-    
+    result = pthread_create(&scheduler_thread, NULL, scheduler_function, NULL);
+    if (result != 0) {
+        endwin();
+        fprintf(stderr, "Error creating scheduler thread: %s\n", strerror(result));
+        return 1;
+    }
+
+    // Create worker threads
+    for (int i = 0; i < MAX_THREADS; i++) {
+        result = pthread_create(&threads[i], NULL, thread_function, &thread_info[i]);
+        if (result != 0) {
+            should_exit = 1;
+            pthread_cond_broadcast(&scheduler_cond);
+            for (int j = 0; j < i; j++) {
+                pthread_join(threads[j], NULL);
+            }
+            pthread_join(scheduler_thread, NULL);
+            endwin();
+            fprintf(stderr, "Error creating thread %d: %s\n", i, strerror(result));
+            return 1;
+        }
+    }
+
+    // Main loop
+    while ((ch = getch()) != 'q') {
+        display_threads();
+        usleep(REFRESH_RATE);
+    }
+
     // Cleanup
-    endwin();
+    should_exit = 1;
+    pthread_cond_broadcast(&scheduler_cond);
     
-    // Terminate threads
-    for (int i = 0; i < NUM_THREADS; i++) {
-        pthread_mutex_lock(&threads[i].mutex);
-        threads[i].state = TERMINATED;
-        pthread_mutex_unlock(&threads[i].mutex);
-        pthread_join(threads[i].tid, NULL);
-        pthread_mutex_destroy(&threads[i].mutex);
+    for (int i = 0; i < MAX_THREADS; i++) {
+        pthread_join(threads[i], NULL);
     }
     
-    pthread_mutex_destroy(&display_mutex);
-    
+    pthread_join(scheduler_thread, NULL);
+    endwin();
+
     return 0;
 } 
