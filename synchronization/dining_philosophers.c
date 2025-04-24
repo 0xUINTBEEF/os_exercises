@@ -22,6 +22,8 @@
 #include <string.h>
 #include <signal.h>
 
+#define LOG_FILE "dining_philosophers.log"
+
 // Constants
 #define NUM_PHILOSOPHERS 5
 #define EATING_TIME 2
@@ -46,6 +48,22 @@ static volatile sig_atomic_t running = 1;
 static void signal_handler(int sig) {
     (void)sig;
     running = 0;
+}
+
+// Function to log messages to a file
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
+}
+
+void philosopher_action(int philosopher_id, const char *action) {
+    char log_entry[128];
+    snprintf(log_entry, sizeof(log_entry), "Philosopher %d: %s", philosopher_id, action);
+    log_message(log_entry);
 }
 
 /**
@@ -74,16 +92,19 @@ static void *philosopher_thread(void *arg) {
     free(arg);
     
     printf("Philosopher %d starting\n", philosopher);
+    philosopher_action(philosopher, "starting");
     
     while (running && meals_eaten[philosopher] < MAX_MEALS) {
         // Think
         printf("Philosopher %d is thinking\n", philosopher);
+        philosopher_action(philosopher, "thinking");
         sleep(THINKING_TIME);
         
         // Get hungry
         pthread_mutex_lock(&mutex);
         states[philosopher] = HUNGRY;
         printf("Philosopher %d is hungry\n", philosopher);
+        philosopher_action(philosopher, "hungry");
         
         // Try to eat
         while (!can_eat(philosopher) && running) {
@@ -100,6 +121,7 @@ static void *philosopher_thread(void *arg) {
         meals_eaten[philosopher]++;
         printf("Philosopher %d is eating (meal %d/%d)\n", 
                philosopher, meals_eaten[philosopher], MAX_MEALS);
+        philosopher_action(philosopher, "eating");
         
         pthread_mutex_unlock(&mutex);
         sleep(EATING_TIME);
@@ -108,6 +130,7 @@ static void *philosopher_thread(void *arg) {
         pthread_mutex_lock(&mutex);
         states[philosopher] = THINKING;
         printf("Philosopher %d finished eating\n", philosopher);
+        philosopher_action(philosopher, "finished eating");
         
         // Notify neighbors
         int left = (philosopher + NUM_PHILOSOPHERS - 1) % NUM_PHILOSOPHERS;
@@ -124,6 +147,7 @@ static void *philosopher_thread(void *arg) {
     }
     
     printf("Philosopher %d completed all meals\n", philosopher);
+    philosopher_action(philosopher, "completed all meals");
     return NULL;
 }
 
@@ -134,6 +158,8 @@ int main(void) {
     // Set up signal handler
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    
+    log_message("Dining philosophers simulation started");
     
     // Initialize condition variables
     for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
@@ -174,6 +200,8 @@ int main(void) {
         pthread_cond_destroy(&cond_vars[i]);
     }
     pthread_mutex_destroy(&mutex);
+    
+    log_message("Dining philosophers simulation finished");
     
     printf("All philosophers have completed their meals\n");
     return EXIT_SUCCESS;

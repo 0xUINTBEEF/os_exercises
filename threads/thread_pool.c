@@ -16,11 +16,13 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 
 // Constants
 #define MAX_THREADS 4
 #define MAX_TASKS 100
 #define TASK_QUEUE_SIZE 1000
+#define LOG_FILE "thread_pool.log"
 
 // Task structure
 typedef struct {
@@ -50,6 +52,8 @@ static thread_pool_t pool;
 static void *worker_thread(void *arg);
 static int add_task(void (*function)(void *), void *arg, int priority);
 static void execute_task(task_t *task);
+static void log_message(const char *message);
+void thread_pool_action(const char *action);
 
 /**
  * Initialize the thread pool
@@ -259,6 +263,20 @@ int thread_pool_queued_tasks(void) {
     return count;
 }
 
+// Function to log messages to a file
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
+}
+
+void thread_pool_action(const char *action) {
+    log_message(action);
+}
+
 // Example task function
 void example_task(void* arg) {
     int* number = (int*)arg;
@@ -270,6 +288,7 @@ void example_task(void* arg) {
  * @brief Main function demonstrating thread pool usage
  */
 int main(void) {
+    log_message("Thread pool started");
     thread_pool_init();
     
     // Add some tasks
@@ -283,5 +302,6 @@ int main(void) {
     sleep(2);
     
     thread_pool_shutdown();
+    log_message("Thread pool finished");
     return 0;
-} 
+}

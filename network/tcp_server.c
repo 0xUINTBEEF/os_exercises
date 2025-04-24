@@ -21,6 +21,8 @@
 #include <errno.h>
 #include <time.h>
 
+#define LOG_FILE "tcp_server.log"
+
 // Constants
 #define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
@@ -78,6 +80,19 @@ static int find_available_slot(void) {
     }
     pthread_mutex_unlock(&clients_mutex);
     return -1;
+}
+
+/**
+ * Function to log messages to a file
+ * @param message Message to log
+ */
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
 }
 
 /**
@@ -189,6 +204,7 @@ int main(void) {
     }
 
     printf("Server listening on port %d...\n", PORT);
+    log_message("TCP server started");
 
     // Initialize clients array
     init_clients();
@@ -232,6 +248,7 @@ int main(void) {
 
     // Cleanup
     printf("Shutting down server...\n");
+    log_message("TCP server finished");
     
     // Close all client connections
     pthread_mutex_lock(&clients_mutex);
@@ -247,4 +264,4 @@ int main(void) {
     close(server_socket);
 
     return 0;
-} 
+}

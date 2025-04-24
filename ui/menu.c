@@ -20,12 +20,14 @@
 #include <ncurses.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 // Constants
 #define MAX_OPTIONS 10
 #define MAX_TITLE_LENGTH 50
 #define MAX_DESC_LENGTH 200
 #define MAX_INPUT_LENGTH 10
+#define LOG_FILE "menu.log"
 
 // Menu option structure
 typedef struct {
@@ -52,6 +54,8 @@ static void wait_for_key(void);
 static void handle_signal(int sig);
 static int get_valid_input(int max_choice);
 static void show_menu(Menu* menu);
+static void log_message(const char *message);
+void menu_action(const char *action);
 
 // Global variables
 static volatile sig_atomic_t running = 1;
@@ -190,6 +194,7 @@ static void show_menu(Menu* menu) {
         
         if (choice > 0 && choice <= menu->option_count) {
             if (menu->options[choice - 1].function != NULL) {
+                menu_action(menu->options[choice - 1].title);
                 menu->options[choice - 1].function();
             } else if (strcmp(menu->options[choice - 1].title, "Back") == 0) {
                 return;
@@ -219,6 +224,20 @@ static void show_sync_menu(void) {
     show_menu(&sync_menu);
 }
 
+// Function to log messages to a file
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
+}
+
+void menu_action(const char *action) {
+    log_message(action);
+}
+
 int main(void) {
     // Set up signal handlers
     signal(SIGINT, handle_signal);
@@ -230,11 +249,17 @@ int main(void) {
     noecho();
     keypad(stdscr, TRUE);
     
+    // Log menu system start
+    log_message("Menu system started");
+    
     // Show main menu
     show_menu(&main_menu);
+    
+    // Log menu system finish
+    log_message("Menu system finished");
     
     // Clean up ncurses
     endwin();
     
     return EXIT_SUCCESS;
-} 
+}

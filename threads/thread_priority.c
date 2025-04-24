@@ -21,6 +21,7 @@
 #define MAX_THREADS 5
 #define MAX_ITERATIONS 1000000
 #define PRIORITY_LEVELS 5
+#define LOG_FILE "thread_priority.log"
 
 // Structure to hold thread data
 typedef struct {
@@ -33,6 +34,20 @@ typedef struct {
 
 // Global variables
 static pthread_mutex_t output_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Function to log messages to a file
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
+}
+
+void thread_priority_action(const char *action) {
+    log_message(action);
+}
 
 /**
  * Thread function that performs work based on priority
@@ -90,6 +105,8 @@ int main(void) {
     int result;
     int i;
 
+    log_message("Thread priority management started");
+
     // Check if we have sufficient privileges for real-time scheduling
     if (geteuid() != 0) {
         fprintf(stderr, "Warning: Program should be run with root privileges for real-time scheduling\n");
@@ -123,5 +140,7 @@ int main(void) {
         }
     }
 
+    log_message("Thread priority management finished");
+
     return 0;
-} 
+}

@@ -18,12 +18,14 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 
 // Constants
 #define BUFFER_SIZE 1024
 #define DEFAULT_PORT 8080
 #define DEFAULT_HOST "127.0.0.1"
 #define TIMEOUT_SECONDS 5
+#define LOG_FILE "tcp_client.log"
 
 // Global variables
 static volatile sig_atomic_t running = 1;
@@ -36,6 +38,19 @@ static int client_socket = -1;
 static void signal_handler(int sig) {
     (void)sig;
     running = 0;
+}
+
+/**
+ * Function to log messages to a file
+ * @param message Message to log
+ */
+static void log_message(const char *message) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file) {
+        time_t now = time(NULL);
+        fprintf(log_file, "%s: %s\n", ctime(&now), message);
+        fclose(log_file);
+    }
 }
 
 /**
@@ -157,6 +172,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    log_message("TCP client started");
+
     printf("Connected to server %s:%d\n", host, port);
     printf("Type 'quit' to exit\n");
 
@@ -204,5 +221,7 @@ int main(int argc, char *argv[]) {
         close(client_socket);
     }
 
+    log_message("TCP client finished");
+
     return 0;
-} 
+}
